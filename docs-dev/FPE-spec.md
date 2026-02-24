@@ -126,13 +126,14 @@ Folio ships with 3 fundamental policies that handle the lifecycle of most docume
 
 When a document enters the system, the Engine runs this exact logic loop:
 
-1.  **Load Policies:** Fetch all active YAML files.
+1.  **Load Policies:** Fetch all active YAML files (Local + Imported Packs).
 2.  **Sort Policies:** Order by `metadata.priority` (Descending).
 3.  **Iterate:**
     *   Run `match.conditions` for Policy 1.
     *   If **Match = True**:
         *   Stop iteration (First Match Wins strategy).
         *   Execute `extract`.
+        *   **Derive Variables:** Run computed transformers (e.g., extract `year` from `due_date`).
         *   Validate `required` fields are present.
         *   Execute `actions`.
         *   Generate `manifest.json` sidecar file.
@@ -140,13 +141,56 @@ When a document enters the system, the Engine runs this exact logic loop:
         *   Proceed to Policy 2.
 4.  **Fallback:** If no match found by end of list $\rightarrow$ Execute **Policy B (Inbox Zero)**.
 
-## 5. Error Handling
+---
+
+## 5. Advanced Features
+
+### 5.1 Computed Variables (Transformers)
+To keep paths clean, Folio automatically derives common variables from extracted data.
+
+```yaml
+  # In section 2.3
+  extract:
+    - key: "bill_date"
+      type: "date"
+      transformers:
+        - name: "get_year"
+          as: "year"   # Creates {year} for use in paths
+        - name: "get_month_name"
+          as: "month"  # Creates {month} (e.g., "January")
+```
+
+### 5.2 Multi-Page Splitting
+If a policy is marked as `kind: Splitter`, it identifies page boundaries.
+*   **Strategy:** "LLM-Boundary" (LLM looks at first/last lines of pages to find new document headers).
+
+---
+
+## 6. UX & Distribution Patterns
+
+### 6.1 Policy Packs (The "Packs" System)
+Policies can be bundled into JSON/YAML collections for easy sharing.
+*   **Discovery:** Users can "Search for Packs" (e.g., "Sunnyvale Utilities").
+*   **Pre-Configured:** Packs include verified regex/keywords for specific localized entities.
+
+### 6.2 Natural Language Generation (AI-to-YAML)
+The Folio UI provides a "Chat-to-Policy" interface.
+*   **Input:** "Put my Tesla invoices in a Car folder."
+*   **Logic:** Folio uses an internal LLM agent to:
+    1.  Draft the `metadata.id` (e.g., `tesla-invoice`).
+    2.  Select `match.conditions` (keyword: "Tesla").
+    3.  Define `actions.move` (destination: "/Car/").
+    4.  Save the YAML to `~/.folio/policies/user/`.
+
+---
+
+## 7. Error Handling
 *   **Validation Failure:** If `total_amount` is required but not found $\rightarrow$ Trigger "Human Review" workflow.
 *   **Hallucination Check:** If extracted date is `2025` but document says `2023` $\rightarrow$ Flag as "Date Mismatch".
 
 ---
 
-## 6. Development Guidelines for Policies
+## 8. Development Guidelines for Policies
 *   **Idempotency:** Running a policy twice on the same file should result in the same outcome (no duplicate CSV rows).
-*   **Modularity:** Policies are self-contained. Deleting a policy simply stops Folio from recognizing that document type; it breaks nothing else.
+*   **Modularity:** Policies are self-contained. Deleting a policy simply stops Folio from recognizing that document type.
 *   **Readability:** Variable names in `extract` (`{total_amount}`) must match exactly in `actions` (`pattern: ...{total_amount}...`).
