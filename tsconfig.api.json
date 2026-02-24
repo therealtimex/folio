@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ESNext",
+    "outDir": "dist/api",
+    "noEmit": false,
+    "declaration": false,
+    "allowJs": true,
+    "skipLibCheck": true,
+    "rootDir": "api"
+  },
+  "include": ["api/**/*"],
+  "exclude": ["node_modules", "dist"]
+}
