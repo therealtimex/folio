@@ -13,6 +13,7 @@ try {
   const files = readdirSync(migrationsDir);
   const timestamps = files
     .filter((file) => file.endsWith(".sql"))
+    .filter((file) => !file.toLowerCase().includes("test")) // exclude test migrations
     .map((file) => {
       const match = file.match(/^(\d{14})_/);
       return match ? match[1] : null;

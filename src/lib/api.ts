@@ -291,6 +291,48 @@ class HybridApiClient {
       body: JSON.stringify(payload)
     });
   }
+
+  // ─── Policy Engine API ─────────────────────────────────────────────────────
+
+  getPolicies(token?: string | null) {
+    return this.expressRequest<{ success: boolean; policies: any[] }>("/api/policies", {
+      auth: Boolean(token), token
+    });
+  }
+
+  savePolicy(policy: unknown, token?: string | null) {
+    return this.expressRequest<{ success: boolean; filePath: string }>("/api/policies", {
+      method: "POST",
+      auth: Boolean(token), token,
+      body: JSON.stringify(policy)
+    });
+  }
+
+  deletePolicy(id: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean }>(`/api/policies/${id}`, {
+      method: "DELETE",
+      auth: Boolean(token), token
+    });
+  }
+
+  reloadPolicies(token?: string | null) {
+    return this.expressRequest<{ success: boolean; count: number }>("/api/policies/reload", {
+      method: "POST",
+      auth: Boolean(token), token
+    });
+  }
+
+  synthesizePolicy(payload: { description: string; provider?: string; model?: string }, token?: string | null) {
+    return this.expressRequest<{ success: boolean; policy: any }>("/api/policies/synthesize", {
+      method: "POST",
+      auth: Boolean(token), token,
+      body: JSON.stringify(payload)
+    });
+  }
+
+  getSDKChatProviders() {
+    return this.expressRequest<{ success: boolean; providers: { provider: string; models: { id: string }[] }[] }>("/api/sdk/providers/chat");
+  }
 }
 
 export const api = new HybridApiClient();

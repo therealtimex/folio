@@ -180,7 +180,7 @@ The Folio UI provides a "Chat-to-Policy" interface.
     1.  Draft the `metadata.id` (e.g., `tesla-invoice`).
     2.  Select `match.conditions` (keyword: "Tesla").
     3.  Define `actions.move` (destination: "/Car/").
-    4.  Save the YAML to `~/.folio/policies/user/`.
+    4.  Persist the policy to the Supabase `policies` table (user-scoped via RLS).
 
 ---
 

@@ -13,6 +13,7 @@ import { checkMigrationStatus, type MigrationStatus } from "./lib/migration-chec
 import { MigrationBanner } from "./components/migration/MigrationBanner";
 import { MigrationModal } from "./components/migration/MigrationModal";
 import { clearSupabaseConfig, getConfigSource, getSupabaseConfig } from "./lib/supabase-config";
+import { PoliciesPage } from "./components/PoliciesPage";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert";
@@ -28,7 +29,8 @@ import {
   LayoutDashboard,
   User,
   AlertCircle,
-  Loader2
+  Loader2,
+  ScrollText
 } from "lucide-react";
 
 type Page = "dashboard" | "account" | "config";
@@ -216,6 +218,7 @@ export function App() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "policies", label: "Policies", icon: ScrollText },
     { id: "config", label: "Configuration", icon: Settings2 },
     { id: "account", label: "Account Settings", icon: User },
   ];
@@ -378,6 +381,9 @@ export function App() {
 
         {activePage === "dashboard" && (
           <Dashboard configSnapshot={configSnapshot} configSource={configSource} />
+        )}
+        {activePage === "policies" && (
+          <PoliciesPage />
         )}
         {activePage === "config" && (
           <Configuration />

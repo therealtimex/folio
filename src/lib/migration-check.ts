@@ -46,7 +46,15 @@ export async function getDatabaseMigrationInfo(
       return { latestMigrationTimestamp: null };
     }
 
-    return { latestMigrationTimestamp: data ?? null };
+    const raw = data ?? null;
+
+    // Exclude test migration timestamps (≥ 29990000000000) — they are always the
+    // lexical max and would incorrectly suppress real pending migrations.
+    if (raw && raw >= "29990000000000") {
+      return { latestMigrationTimestamp: null };
+    }
+
+    return { latestMigrationTimestamp: raw };
   } catch {
     return { latestMigrationTimestamp: null };
   }

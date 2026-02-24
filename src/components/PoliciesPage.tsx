@@ -1,0 +1,486 @@
+import { useState, useEffect, useCallback } from "react";
+import {
+    ScrollText,
+    Sparkles,
+    Package,
+    Plus,
+    Trash2,
+    RefreshCw,
+    ToggleLeft,
+    ToggleRight,
+    Loader2,
+    Info,
+    ChevronDown,
+    ChevronUp,
+    Tag,
+    Cpu
+} from "lucide-react";
+import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { Textarea } from "./ui/textarea";
+import { Badge } from "./ui/badge";
+import { Alert, AlertDescription } from "./ui/alert";
+import { toast } from "./Toast";
+import { api } from "../lib/api";
+import { getSupabaseClient } from "../lib/supabase-config";
+import { cn } from "@/lib/utils";
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface PolicyMetadata {
+    id: string;
+    name: string;
+    description: string;
+    priority: number;
+    enabled?: boolean;
+    tags?: string[];
+}
+
+interface FolioPolicy {
+    metadata: PolicyMetadata;
+    spec: {
+        match: { strategy: string; conditions: { type: string; value?: string | string[] }[] };
+        extract?: { key: string; type: string; required?: boolean }[];
+        actions?: { type: string; destination?: string; pattern?: string }[];
+    };
+}
+
+// ─── Preset Packs ────────────────────────────────────────────────────────────
+
+const PACKS = [
+    {
+        id: "bay-area-utilities",
+        name: "Bay Area Utilities",
+        description: "PG&E, Recology, EBMUD, and SCE bill handling",
+        policies: 4,
+        tags: ["utilities", "california"]
+    },
+    {
+        id: "freelancer-tax",
+        name: "Freelancer Tax Pack",
+        description: "1099-NEC, W-9, invoices, and estimated taxes",
+        policies: 6,
+        tags: ["finance", "tax"]
+    },
+    {
+        id: "medical-records",
+        name: "Medical Records",
+        description: "EOB, lab results, prescription receipts",
+        policies: 5,
+        tags: ["health", "insurance"]
+    },
+    {
+        id: "legal-docs",
+        name: "Legal Documents",
+        description: "Contracts, notices, deeds, and court documents",
+        policies: 3,
+        tags: ["legal", "priority"]
+    }
+];
+
+// ─── Component ───────────────────────────────────────────────────────────────
+
+export function PoliciesPage() {
+    const [policies, setPolicies] = useState<FolioPolicy[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
+    const [description, setDescription] = useState("");
+    const [isSynthesizing, setIsSynthesizing] = useState(false);
+    const [synthesizedPolicy, setSynthesizedPolicy] = useState<FolioPolicy | null>(null);
+    const [isSaving, setIsSaving] = useState(false);
+    const [expandedId, setExpandedId] = useState<string | null>(null);
+    const [activeTab, setActiveTab] = useState<"policies" | "packs">("policies");
+    const [chatProviders, setChatProviders] = useState<{ provider: string; models: { id: string }[] }[]>([]);
+    const [selectedProvider, setSelectedProvider] = useState("");
+    const [selectedModel, setSelectedModel] = useState("");
+    const [sessionToken, setSessionToken] = useState<string | null>(null);
+
+    const fetchPolicies = useCallback(async () => {
+        setIsLoading(true);
+        const resp = await api.getPolicies?.(sessionToken);
+        if (resp?.data?.policies) {
+            setPolicies(resp.data.policies);
+        }
+        setIsLoading(false);
+    }, [sessionToken]);
+
+    const fetchProviders = useCallback(async () => {
+        try {
+            const resp = await api.getSDKChatProviders?.();
+            const providers = resp?.data?.providers ?? [];
+            setChatProviders(providers);
+            if (providers.length > 0 && !selectedProvider) {
+                setSelectedProvider(providers[0].provider);
+                setSelectedModel(providers[0].models?.[0]?.id ?? "");
+            }
+        } catch {
+            // Providers unavailable – synthesize will use SDK default
+        }
+    }, [selectedProvider]);
+
+    useEffect(() => {
+        // Fetch session token for authenticated API calls
+        const supabase = getSupabaseClient();
+        if (supabase) {
+            supabase.auth.getSession().then(({ data }) => {
+                setSessionToken(data.session?.access_token ?? null);
+            });
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchPolicies();
+        fetchProviders();
+    }, [fetchPolicies, fetchProviders]);
+
+    const handleSynthesize = async () => {
+        if (!description.trim()) return;
+        setIsSynthesizing(true);
+        setSynthesizedPolicy(null);
+        try {
+            const resp = await api.synthesizePolicy?.({
+                description,
+                provider: selectedProvider || undefined,
+                model: selectedModel || undefined
+            });
+            if (resp?.data?.policy) {
+                setSynthesizedPolicy(resp.data.policy);
+                const warning = (resp.data as any).warning;
+                if (warning) toast.warning(warning);
+                else toast.success("Policy synthesized! Review and save below.");
+            } else {
+                toast.error((resp?.data as any)?.error ?? "Synthesis failed.");
+            }
+        } catch {
+            toast.error("LLM synthesis failed.");
+        } finally {
+            setIsSynthesizing(false);
+        }
+    };
+
+    const handleSavePolicy = async (policy: FolioPolicy) => {
+        setIsSaving(true);
+        try {
+            await api.savePolicy?.(policy, sessionToken);
+            toast.success(`Policy "${policy.metadata.name}" saved.`);
+            setSynthesizedPolicy(null);
+            setDescription("");
+            await fetchPolicies();
+        } catch {
+            toast.error("Failed to save policy.");
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleDelete = async (id: string) => {
+        const confirmed = window.confirm(`Delete policy "${id}"?`);
+        if (!confirmed) return;
+        await api.deletePolicy?.(id, sessionToken);
+        toast.success("Policy deleted.");
+        await fetchPolicies();
+    };
+
+    const handleReload = async () => {
+        await api.reloadPolicies?.(sessionToken);
+        await fetchPolicies();
+        toast.success("Policies reloaded from disk.");
+    };
+
+    return (
+        <div className="max-w-[1200px] mx-auto px-8 py-10 space-y-10 animate-in fade-in duration-500">
+            {/* Header */}
+            <div className="flex items-end justify-between">
+                <div>
+                    <h1 className="text-3xl font-black tracking-tight flex items-center gap-3">
+                        <ScrollText className="w-8 h-8 text-primary" />
+                        Policy Engine
+                    </h1>
+                    <p className="text-muted-foreground text-sm mt-1">
+                        Define automation rules that govern how Folio handles your documents.
+                    </p>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleReload} className="gap-2 rounded-xl">
+                    <RefreshCw className="w-4 h-4" />
+                    Reload
+                </Button>
+            </div>
+
+            {/* Tabs */}
+            <div className="flex gap-1 p-1 rounded-2xl bg-muted/50 border w-fit">
+                {(["policies", "packs"] as const).map((tab) => (
+                    <button
+                        key={tab}
+                        onClick={() => setActiveTab(tab)}
+                        className={cn(
+                            "px-5 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all",
+                            activeTab === tab
+                                ? "bg-background shadow-sm text-foreground"
+                                : "text-muted-foreground hover:text-foreground"
+                        )}
+                    >
+                        {tab === "policies" ? "Active Policies" : "Policy Packs"}
+                    </button>
+                ))}
+            </div>
+
+            {activeTab === "policies" && (
+                <>
+                    {/* Magic Composer */}
+                    <div className="rounded-2xl border bg-card/60 backdrop-blur-sm p-6 shadow-sm space-y-4">
+                        <div className="flex items-center gap-2 mb-1">
+                            <Sparkles className="w-4 h-4 text-primary" />
+                            <h2 className="text-sm font-black uppercase tracking-widest">Magic Composer</h2>
+                        </div>
+                        <p className="text-xs text-muted-foreground">
+                            Describe a rule in plain English. Click ✨ to generate the policy automatically.
+                        </p>
+
+                        {/* Provider selector */}
+                        {chatProviders.length > 0 && (
+                            <div className="flex gap-2 items-center">
+                                <Cpu className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                <select
+                                    value={`${selectedProvider}::${selectedModel}`}
+                                    onChange={(e) => {
+                                        const [p, m] = e.target.value.split("::");
+                                        setSelectedProvider(p);
+                                        setSelectedModel(m);
+                                    }}
+                                    className="text-xs rounded-lg border border-border/40 bg-background px-2 py-1 text-foreground flex-1 max-w-xs"
+                                >
+                                    {chatProviders.flatMap((p) =>
+                                        (p.models ?? []).map((m) => (
+                                            <option key={`${p.provider}::${m.id}`} value={`${p.provider}::${m.id}`}>
+                                                {p.provider} / {m.id}
+                                            </option>
+                                        ))
+                                    )}
+                                </select>
+                                <span className="text-[10px] text-muted-foreground">for synthesis</span>
+                            </div>
+                        )}
+
+                        <div className="flex gap-3 items-start">
+                            <Textarea
+                                placeholder="e.g. If I get a bill from Tesla, move it to /Car/ folder and log the amount to my CSV…"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                className="flex-1 min-h-[80px] resize-none rounded-xl border-border/40 bg-background text-sm"
+                                onKeyDown={(e) => {
+                                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) handleSynthesize();
+                                }}
+                            />
+                            <Button
+                                onClick={handleSynthesize}
+                                disabled={isSynthesizing || !description.trim()}
+                                className={cn(
+                                    "h-10 w-10 p-0 rounded-xl flex items-center justify-center transition-all",
+                                    "bg-primary text-primary-foreground shadow-lg shadow-primary/20",
+                                    "hover:scale-105 active:scale-95"
+                                )}
+                                title="Synthesize policy with AI"
+                            >
+                                {isSynthesizing ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                    <Sparkles className="w-4 h-4" />
+                                )}
+                            </Button>
+                        </div>
+
+                        {/* Synthesized Preview */}
+                        {synthesizedPolicy && (
+                            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 space-y-3 animate-in slide-in-from-bottom-2 duration-300">
+                                <div className="flex items-center justify-between">
+                                    <div>
+                                        <p className="font-black text-sm">{synthesizedPolicy.metadata.name}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">{synthesizedPolicy.metadata.description}</p>
+                                    </div>
+                                    <Badge variant="outline" className="text-[10px] uppercase font-bold">
+                                        Priority {synthesizedPolicy.metadata.priority}
+                                    </Badge>
+                                </div>
+                                <div className="grid grid-cols-3 gap-3 text-xs text-muted-foreground">
+                                    <div className="rounded-lg bg-muted/60 p-2">
+                                        <div className="font-bold uppercase tracking-widest text-[9px] mb-1 text-foreground">Match</div>
+                                        <div>{synthesizedPolicy.spec.match.conditions.length} condition(s)</div>
+                                    </div>
+                                    <div className="rounded-lg bg-muted/60 p-2">
+                                        <div className="font-bold uppercase tracking-widest text-[9px] mb-1 text-foreground">Extract</div>
+                                        <div>{synthesizedPolicy.spec.extract?.length ?? 0} field(s)</div>
+                                    </div>
+                                    <div className="rounded-lg bg-muted/60 p-2">
+                                        <div className="font-bold uppercase tracking-widest text-[9px] mb-1 text-foreground">Actions</div>
+                                        <div>{synthesizedPolicy.spec.actions?.length ?? 0} action(s)</div>
+                                    </div>
+                                </div>
+                                <div className="flex gap-2 pt-1">
+                                    <Button
+                                        size="sm"
+                                        onClick={() => handleSavePolicy(synthesizedPolicy)}
+                                        disabled={isSaving}
+                                        className="flex-1 h-8 rounded-xl font-black text-[10px] uppercase tracking-widest"
+                                    >
+                                        {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save Policy"}
+                                    </Button>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => setSynthesizedPolicy(null)}
+                                        className="h-8 px-3 rounded-xl"
+                                    >
+                                        Discard
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Policy Directory */}
+                    <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                            <h2 className="text-xs font-black uppercase tracking-widest text-muted-foreground">
+                                Active Policies ({policies.length})
+                            </h2>
+                        </div>
+
+                        {isLoading ? (
+                            <div className="flex items-center justify-center py-16 text-muted-foreground">
+                                <Loader2 className="w-6 h-6 animate-spin mr-3" />
+                                Loading policies...
+                            </div>
+                        ) : policies.length === 0 ? (
+                            <Alert className="rounded-2xl border-dashed">
+                                <Info className="h-4 w-4" />
+                                <AlertDescription className="text-sm">
+                                    No policies yet. Use the Magic Composer above to create your first one.
+                                </AlertDescription>
+                            </Alert>
+                        ) : (
+                            <div className="space-y-2">
+                                {policies.map((p) => (
+                                    <div
+                                        key={p.metadata.id}
+                                        className="rounded-2xl border bg-card/50 shadow-sm overflow-hidden transition-all"
+                                    >
+                                        <div className="flex items-center gap-4 px-5 py-4">
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center gap-2 flex-wrap">
+                                                    <span className="font-bold text-sm truncate">{p.metadata.name}</span>
+                                                    <Badge variant="outline" className="text-[9px] shrink-0">P{p.metadata.priority}</Badge>
+                                                    {p.metadata.tags?.map((tag) => (
+                                                        <Badge key={tag} variant="secondary" className="text-[9px] gap-1 shrink-0">
+                                                            <Tag className="w-2.5 h-2.5" />{tag}
+                                                        </Badge>
+                                                    ))}
+                                                </div>
+                                                <p className="text-xs text-muted-foreground mt-0.5 truncate">{p.metadata.description}</p>
+                                            </div>
+                                            <div className="flex items-center gap-2 shrink-0">
+                                                <button
+                                                    className="text-muted-foreground hover:text-foreground transition-colors"
+                                                    onClick={() => setExpandedId(expandedId === p.metadata.id ? null : p.metadata.id)}
+                                                >
+                                                    {expandedId === p.metadata.id ? (
+                                                        <ChevronUp className="w-4 h-4" />
+                                                    ) : (
+                                                        <ChevronDown className="w-4 h-4" />
+                                                    )}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDelete(p.metadata.id)}
+                                                    className="text-muted-foreground hover:text-destructive transition-colors"
+                                                >
+                                                    <Trash2 className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        {expandedId === p.metadata.id && (
+                                            <div className="border-t px-5 py-4 bg-muted/20 space-y-3 animate-in slide-in-from-top-2 duration-200">
+                                                <div className="grid grid-cols-3 gap-3 text-xs">
+                                                    <div>
+                                                        <div className="font-bold uppercase tracking-widest text-[9px] text-muted-foreground mb-1">Match ({p.spec.match.strategy})</div>
+                                                        {p.spec.match.conditions.map((c, i) => (
+                                                            <div key={i} className="text-muted-foreground">
+                                                                <span className="font-mono bg-muted px-1 rounded text-[10px]">{c.type}</span>
+                                                                {" "}
+                                                                {Array.isArray(c.value) ? c.value.join(", ") : c.value}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-bold uppercase tracking-widest text-[9px] text-muted-foreground mb-1">Extract</div>
+                                                        {p.spec.extract?.map((f) => (
+                                                            <div key={f.key} className="text-muted-foreground">
+                                                                <span className="font-mono bg-muted px-1 rounded text-[10px]">{f.key}</span>
+                                                                {" "}({f.type}){f.required ? " *" : ""}
+                                                            </div>
+                                                        )) ?? <span className="text-muted-foreground/60">—</span>}
+                                                    </div>
+                                                    <div>
+                                                        <div className="font-bold uppercase tracking-widest text-[9px] text-muted-foreground mb-1">Actions</div>
+                                                        {p.spec.actions?.map((a, i) => (
+                                                            <div key={i} className="text-muted-foreground">
+                                                                <span className="font-mono bg-muted px-1 rounded text-[10px]">{a.type}</span>
+                                                                {" "}
+                                                                {a.destination ?? a.pattern ?? ""}
+                                                            </div>
+                                                        )) ?? <span className="text-muted-foreground/60">—</span>}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                </>
+            )}
+
+            {activeTab === "packs" && (
+                <div className="space-y-4">
+                    <p className="text-xs text-muted-foreground">
+                        Import curated policy bundles to instantly configure Folio for common use cases.
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        {PACKS.map((pack) => (
+                            <div
+                                key={pack.id}
+                                className="rounded-2xl border bg-card/60 p-5 space-y-3 hover:border-primary/30 hover:shadow-md transition-all group"
+                            >
+                                <div>
+                                    <div className="flex items-start justify-between gap-2">
+                                        <p className="font-black text-sm">{pack.name}</p>
+                                        <Badge variant="outline" className="text-[9px] shrink-0">
+                                            {pack.policies} policies
+                                        </Badge>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-1">{pack.description}</p>
+                                </div>
+                                <div className="flex flex-wrap gap-1">
+                                    {pack.tags.map((tag) => (
+                                        <Badge key={tag} variant="secondary" className="text-[9px] gap-1">
+                                            <Tag className="w-2.5 h-2.5" />{tag}
+                                        </Badge>
+                                    ))}
+                                </div>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="w-full h-8 rounded-xl font-black text-[10px] uppercase tracking-widest group-hover:border-primary/40 transition-all"
+                                    onClick={() => toast.info(`"${pack.name}" import coming soon!`)}
+                                >
+                                    <Package className="w-3 h-3 mr-2" />
+                                    Import Pack
+                                </Button>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
