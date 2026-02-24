@@ -12,8 +12,7 @@ interface HealthModalProps {
     initStatus: string;
     sessionStatus: string;
     migrationStatus: any;
-    onCheckApi: () => void;
-    onDispatchStub: () => void;
+    onRunMigration?: () => void;
 }
 
 export function HealthModal({
@@ -24,8 +23,7 @@ export function HealthModal({
     initStatus,
     sessionStatus,
     migrationStatus,
-    onCheckApi,
-    onDispatchStub
+    onRunMigration
 }: HealthModalProps) {
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
@@ -63,17 +61,33 @@ export function HealthModal({
                         </div>
                     ))}
 
-                    <div className="p-3 bg-primary/5 rounded-xl border border-primary/10 flex items-center gap-3">
-                        <ShieldCheck className="w-4 h-4 text-primary shrink-0" />
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                            {migrationStatus ? migrationStatus.message : "Checking database schema migration parity..."}
-                        </p>
-                    </div>
-                </div>
+                    <div className={cn(
+                        "p-4 rounded-xl border flex flex-col gap-3 transition-all",
+                        migrationStatus?.needsMigration
+                            ? "bg-amber-500/10 border-amber-500/20 text-amber-600 dark:text-amber-500"
+                            : "bg-primary/5 border-primary/10 text-primary"
+                    )}>
+                        <div className="flex items-center gap-3">
+                            {migrationStatus?.needsMigration ? (
+                                <Activity className="w-4 h-4 shrink-0 animate-pulse" />
+                            ) : (
+                                <ShieldCheck className="w-4 h-4 shrink-0" />
+                            )}
+                            <p className="text-xs font-semibold leading-relaxed">
+                                {migrationStatus ? migrationStatus.message : "Checking database schema migration parity..."}
+                            </p>
+                        </div>
 
-                <div className="flex gap-3">
-                    <Button variant="secondary" className="flex-1" onClick={onCheckApi}>Run Diagnostics</Button>
-                    <Button variant="outline" className="flex-1" onClick={onDispatchStub}>Dispatch Stub</Button>
+                        {migrationStatus?.needsMigration && onRunMigration && (
+                            <Button
+                                size="sm"
+                                className="w-full bg-amber-500 hover:bg-amber-600 text-white font-black text-[10px] uppercase tracking-widest h-8 rounded-lg"
+                                onClick={onRunMigration}
+                            >
+                                Run System Migration
+                            </Button>
+                        )}
+                    </div>
                 </div>
             </DialogContent>
         </Dialog>

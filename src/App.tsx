@@ -8,7 +8,10 @@ import { SetupWizard } from "./components/SetupWizard/SetupWizard";
 import { LoginPage } from "./components/LoginPage";
 import { Logo } from "./components/Logo";
 import { api } from "./lib/api";
+import { Configuration } from "./components/Configuration";
 import { checkMigrationStatus, type MigrationStatus } from "./lib/migration-check";
+import { MigrationBanner } from "./components/migration/MigrationBanner";
+import { MigrationModal } from "./components/migration/MigrationModal";
 import { clearSupabaseConfig, getConfigSource, getSupabaseConfig } from "./lib/supabase-config";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
@@ -28,7 +31,7 @@ import {
   Loader2
 } from "lucide-react";
 
-type Page = "dashboard" | "account";
+type Page = "dashboard" | "account" | "config";
 
 export function App() {
   const config = useMemo(() => getSupabaseConfig(), []);
@@ -49,6 +52,11 @@ export function App() {
   const [sessionStatus, setSessionStatus] = useState<"unknown" | "authenticated" | "anonymous" | "error">("unknown");
   const [sessionEmail, setSessionEmail] = useState<string | null>(null);
   const [migrationStatus, setMigrationStatus] = useState<MigrationStatus | null>(null);
+  const [showMigrationModal, setShowMigrationModal] = useState(false);
+  const [migrationSnoozedUntil, setMigrationSnoozedUntil] = useState<Date | null>(() => {
+    const stored = localStorage.getItem("folio_migration_snoozed_until");
+    return stored ? new Date(stored) : null;
+  });
   const [connectionError, setConnectionError] = useState<string | null>(null);
 
   const supabase = useMemo(() => {
@@ -167,31 +175,6 @@ export function App() {
     };
   }, [supabase, bootstrapCycle]);
 
-  async function handleHealthCheck() {
-    const response = await api.getHealth();
-    if (response.error) {
-      setHealth("error");
-      setLog(`Health check failed: ${String((response.error as { message?: string }).message || response.error)}`);
-      return;
-    }
-
-    setHealth("ok");
-    setLog(JSON.stringify(response.data, null, 2));
-  }
-
-  async function handleDispatchStub() {
-    const response = await api.dispatchProcessingJob({
-      note: "setup-parity-check",
-      timestamp: new Date().toISOString()
-    });
-
-    if (response.error) {
-      setLog(`Dispatch failed: ${String((response.error as { message?: string }).message || response.error)}`);
-      return;
-    }
-
-    setLog(JSON.stringify(response.data, null, 2));
-  }
 
   function handleSetupComplete() {
     const latest = getSupabaseConfig();
@@ -220,8 +203,20 @@ export function App() {
     setBootstrapCycle((value) => value + 1);
   }
 
+  const handleSnoozeMigration = (until: Date) => {
+    setMigrationSnoozedUntil(until);
+    localStorage.setItem("folio_migration_snoozed_until", until.toISOString());
+  };
+
+  const shouldShowMigrationBanner = useMemo(() => {
+    if (!migrationStatus?.needsMigration) return false;
+    if (migrationSnoozedUntil && migrationSnoozedUntil > new Date()) return false;
+    return true;
+  }, [migrationStatus, migrationSnoozedUntil]);
+
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "config", label: "Configuration", icon: Settings2 },
     { id: "account", label: "Account Settings", icon: User },
   ];
 
@@ -271,7 +266,24 @@ export function App() {
   // 3. Final Main Application Shell
   return (
     <div className="min-h-screen bg-background text-foreground selection:bg-primary/10 flex flex-col font-sans animate-in fade-in duration-1000">
-      <header className="border-b bg-background/80 backdrop-blur-xl sticky top-0 z-50">
+      {shouldShowMigrationBanner && migrationStatus && (
+        <MigrationBanner
+          status={migrationStatus}
+          onSnooze={handleSnoozeMigration}
+          onOpenModal={() => setShowMigrationModal(true)}
+        />
+      )}
+
+      {migrationStatus && (
+        <MigrationModal
+          open={showMigrationModal}
+          onOpenChange={setShowMigrationModal}
+          status={migrationStatus}
+          onSnooze={handleSnoozeMigration}
+        />
+      )}
+
+      <header className={cn("border-b bg-background/80 backdrop-blur-xl sticky top-0 z-50 transition-all duration-500", shouldShowMigrationBanner && "mt-24 sm:mt-20")}>
         <div className="container max-w-[1400px] mx-auto px-8 h-20 flex items-center">
           {/* Brand Area */}
           <div className="flex items-center gap-3 w-[280px]">
@@ -325,10 +337,16 @@ export function App() {
             <Button
               variant="ghost"
               size="icon"
-              className="rounded-full h-9 w-9 text-muted-foreground hover:bg-muted/60"
+              className={cn(
+                "rounded-full h-9 w-9 transition-all relative group",
+                migrationStatus?.needsMigration ? "text-red-500 hover:bg-red-500/10" : "text-muted-foreground hover:bg-muted/60"
+              )}
               onClick={() => setHealthOpen(true)}
             >
-              <Activity className="w-5 h-5" />
+              <Activity className={cn("w-5 h-5", migrationStatus?.needsMigration && "animate-pulse")} />
+              {migrationStatus?.needsMigration && (
+                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500 ring-4 ring-red-500/20 animate-ping" />
+              )}
             </Button>
 
             <ModeToggle />
@@ -360,6 +378,9 @@ export function App() {
 
         {activePage === "dashboard" && (
           <Dashboard configSnapshot={configSnapshot} configSource={configSource} />
+        )}
+        {activePage === "config" && (
+          <Configuration />
         )}
         {activePage === "account" && (
           <AccountSettingsPage
@@ -439,8 +460,10 @@ export function App() {
         initStatus={initStatus || "unknown"}
         sessionStatus={sessionStatus || "unknown"}
         migrationStatus={migrationStatus}
-        onCheckApi={handleHealthCheck}
-        onDispatchStub={handleDispatchStub}
+        onRunMigration={() => {
+          setHealthOpen(false);
+          setShowMigrationModal(true);
+        }}
       />
     </div>
   );

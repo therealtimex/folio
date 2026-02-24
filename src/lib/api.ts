@@ -1,5 +1,5 @@
 import { getApiConfig } from "./api-config";
-import type { ApiResponse, ProcessingJob, UserSettings } from "./types";
+import type { ApiResponse, ProcessingJob, UserSettings, EmailAccount, Rule, Stats, Profile } from "./types";
 
 interface ApiOptions extends RequestInit {
   auth?: boolean;
@@ -119,6 +119,169 @@ class HybridApiClient {
       method: "GET",
       auth: Boolean(token),
       token
+    });
+  }
+
+  updateSettings(settings: Partial<UserSettings>, token?: string | null) {
+    return this.edgeRequest<{ success: boolean; settings: UserSettings }>("/api-v1-settings", {
+      method: "PATCH",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify(settings)
+    });
+  }
+
+  getAccounts(token?: string | null) {
+    return this.expressRequest<{ accounts: EmailAccount[] }>("/api/accounts", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  disconnectAccount(accountId: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean }>("/api/accounts/disconnect", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify({ accountId })
+    });
+  }
+
+  getRules(token?: string | null) {
+    return this.expressRequest<{ rules: Rule[] }>("/api/rules", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  createRule(rule: any, token?: string | null) {
+    return this.expressRequest<{ success: boolean; rule: Rule }>("/api/rules", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify(rule)
+    });
+  }
+
+  updateRule(ruleId: string, updates: any, token?: string | null) {
+    return this.expressRequest<{ success: boolean; rule: Rule }>(`/api/rules/${ruleId}`, {
+      method: "PATCH",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify(updates)
+    });
+  }
+
+  deleteRule(ruleId: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean }>(`/api/rules/${ruleId}`, {
+      method: "DELETE",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  toggleRule(ruleId: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; rule: Rule }>(`/api/rules/${ruleId}/toggle`, {
+      method: "POST",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  getStats(token?: string | null) {
+    return this.expressRequest<{ stats: Stats }>("/api/stats", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  getProfile(token?: string | null) {
+    return this.edgeRequest<Profile>("/api-v1-profile", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  updateProfile(updates: any, token?: string | null) {
+    return this.edgeRequest<Profile>("/api-v1-profile", {
+      method: "PATCH",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify(updates)
+    });
+  }
+
+  getChatProviders(token?: string | null) {
+    return this.expressRequest<{ providers: any[] }>("/api/sdk/providers/chat", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  getEmbedProviders(token?: string | null) {
+    return this.expressRequest<{ providers: any[] }>("/api/sdk/providers/embed", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  testLlm(config: any, token?: string | null) {
+    return this.expressRequest<{ success: boolean; message: string }>("/api/sdk/test-llm", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify(config)
+    });
+  }
+
+  getGmailAuthUrl(clientId: string, clientSecret: string, token?: string | null) {
+    return this.expressRequest<{ authUrl: string }>("/api/accounts/gmail/auth-url", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify({ clientId, clientSecret })
+    });
+  }
+
+  connectGmail(authCode: string, clientId: string, clientSecret: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; account: EmailAccount }>("/api/accounts/gmail/connect", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify({ authCode, clientId, clientSecret })
+    });
+  }
+
+  startMicrosoftDeviceFlow(clientId: string, tenantId: string, token?: string | null) {
+    return this.expressRequest<{ deviceCode: any }>("/api/accounts/microsoft/device-flow", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify({ clientId, tenantId })
+    });
+  }
+
+  pollMicrosoftDeviceCode(deviceCode: any, clientId: string, tenantId: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; account: EmailAccount }>("/api/accounts/microsoft/poll", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify({ deviceCode, clientId, tenantId })
+    });
+  }
+
+  connectImap(config: any, token?: string | null) {
+    return this.expressRequest<{ success: boolean; account: EmailAccount }>("/api/accounts/imap/connect", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify(config)
     });
   }
 

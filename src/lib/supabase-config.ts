@@ -1,3 +1,4 @@
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { SupabaseConfig } from "./types";
 
 const STORAGE_KEY = "folio_supabase_config";
@@ -110,4 +111,25 @@ export function getConfigSource(): "ui" | "env" | "none" {
   }
 
   return "none";
+}
+
+let supabaseInstance: SupabaseClient | null = null;
+
+export function getSupabaseClient(): SupabaseClient | null {
+  const config = getSupabaseConfig();
+  if (!config) {
+    supabaseInstance = null;
+    return null;
+  }
+
+  if (!supabaseInstance) {
+    supabaseInstance = createClient(config.url, config.anonKey, {
+      auth: {
+        autoRefreshToken: true,
+        persistSession: true
+      }
+    });
+  }
+
+  return supabaseInstance;
 }
