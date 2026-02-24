@@ -6,6 +6,7 @@ import { ModeToggle } from "./components/mode-toggle";
 import { HealthModal } from "./components/HealthModal";
 import { SetupWizard } from "./components/SetupWizard/SetupWizard";
 import { LoginPage } from "./components/LoginPage";
+import { Logo } from "./components/Logo";
 import { api } from "./lib/api";
 import { checkMigrationStatus, type MigrationStatus } from "./lib/migration-check";
 import { clearSupabaseConfig, getConfigSource, getSupabaseConfig } from "./lib/supabase-config";
@@ -24,7 +25,6 @@ import {
   LayoutDashboard,
   User,
   AlertCircle,
-  Globe,
   Loader2
 } from "lucide-react";
 
@@ -276,7 +276,7 @@ export function App() {
           {/* Brand Area */}
           <div className="flex items-center gap-3 w-[280px]">
             <div className="w-9 h-9 flex items-center justify-center">
-              <Globe className="text-primary w-8 h-8" strokeWidth={1.5} />
+              <Logo className="w-8 h-8" />
             </div>
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-bold tracking-tight text-foreground/90">Folio Foundation</h1>

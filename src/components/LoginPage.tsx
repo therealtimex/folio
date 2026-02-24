@@ -8,7 +8,6 @@ import {
     Key,
     Eye,
     EyeOff,
-    Globe,
     AlertCircle,
     ArrowRight
 } from "lucide-react";
@@ -19,6 +18,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Alert, AlertDescription } from "./ui/alert";
 import { ModeToggle } from "./mode-toggle";
+import { Logo } from "./Logo";
 import { api } from "../lib/api";
 import { cn } from "@/lib/utils";
 
@@ -98,7 +98,7 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
             <div className="absolute top-8 right-8 flex items-center gap-4 z-50">
                 <ModeToggle />
                 <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-muted/40 rounded-full border border-border/40 cursor-pointer hover:bg-muted/60 transition-colors group">
-                    <Globe className="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary transition-colors" />
+                    <Logo className="w-3.5 h-3.5" />
                     <span className="text-[10px] font-extrabold tracking-widest text-muted-foreground">EN</span>
                 </div>
             </div>
@@ -115,7 +115,7 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
 
                     <div className="text-center space-y-4">
                         <div className="mx-auto w-16 h-16 bg-primary rounded-2xl flex items-center justify-center shadow-xl shadow-primary/20 hover:scale-105 transition-transform duration-500">
-                            <Globe className="w-10 h-10 text-primary-foreground" strokeWidth={1.5} />
+                            <Logo className="w-10 h-10" />
                         </div>
                         <div>
                             <h1 className="text-4xl font-black tracking-tighter uppercase italic text-foreground leading-none">

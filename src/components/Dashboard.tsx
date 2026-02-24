@@ -1,7 +1,8 @@
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "./ui/card";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
-import { Settings2, Zap, LayoutDashboard, Sparkles, Database, ShieldCheck, Plus } from "lucide-react";
+import { Logo } from "./Logo";
+import { Settings2, Zap, LayoutDashboard, Database, ShieldCheck, Plus } from "lucide-react";
 
 interface DashboardProps {
     configSnapshot: any;
@@ -13,7 +14,7 @@ export function Dashboard({ configSnapshot, configSource }: DashboardProps) {
         <div className="space-y-12 animate-in fade-in duration-700">
             <div className="text-center space-y-3">
                 <h2 className="text-4xl font-black tracking-tight flex items-center justify-center gap-3">
-                    <Sparkles className="w-10 h-10 text-primary animate-pulse" />
+                    <Logo className="w-10 h-10 animate-pulse" />
                     Foundation Dashboard
                 </h2>
                 <p className="text-muted-foreground text-lg max-w-2xl mx-auto">

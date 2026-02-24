@@ -1,0 +1,46 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Main Gradient: Gives a subtle 'tech' feel and depth -->
+    <linearGradient id="folioGradient" x1="0" y1="0" x2="512" y2="512" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1" /> <!-- Indigo-500 -->
+      <stop offset="100%" stop-color="#4338CA" /> <!-- Indigo-700 -->
+    </linearGradient>
+    
+    <!-- Shadow for depth between the pages -->
+    <filter id="dropShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="8"/>
+      <feOffset dx="4" dy="8" result="offsetblur"/>
+      <feComponentTransfer>
+        <feFuncA type="linear" slope="0.3"/>
+      </feComponentTransfer>
+      <feMerge> 
+        <feMergeNode/>
+        <feMergeNode in="SourceGraphic"/> 
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- BACKGROUND CONTAINER: Ensures visibility on both Dark and Light modes -->
+  <rect x="32" y="32" width="448" height="448" rx="112" fill="url(#folioGradient)" />
+
+  <!-- ICON ELEMENTS -->
+  <g filter="url(#dropShadow)">
+    <!-- The "Back" Page (The Foundation) -->
+    <!-- Representing the raw data/input -->
+    <path d="M180 140 H 330 C 352.09 140 370 157.91 370 180 V 370 C 370 370 370 370 370 370 H 260 L 180 290 V 140 Z" 
+          fill="#FFFFFF" 
+          fill-opacity="0.4" />
+
+    <!-- The "Front" Page (The Organization) -->
+    <!-- Representing the processed, clean output. 
+         Notice how it creates an abstract 'F' shape with the back page. -->
+    <path d="M140 140 H 280 C 302.09 140 320 157.91 320 180 V 332 C 320 354.09 302.09 372 280 372 H 140 V 140 Z" 
+          fill="#FFFFFF" />
+    
+    <!-- The "Action" Accent (The Dog Ear / Fold) -->
+    <!-- Adds a tactile feel, implying this is a document being handled. -->
+    <path d="M320 180 L 280 180 C 268.95 180 260 171.05 260 160 L 260 140" 
+          fill="#C7D2FE" 
+          fill-opacity="0.5"/>
+  </g>
+</svg>

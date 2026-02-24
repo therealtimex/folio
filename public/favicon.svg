@@ -1,0 +1,31 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 
+     FAVICON STRATEGY: 
+     1. High Contrast: Uses the brand Indigo against transparent/white.
+     2. Simplified Geometry: Removed shadows and subtle opacity layers.
+     3. Scalable: This vector will look crisp on Retina displays.
+  -->
+
+  <defs>
+    <linearGradient id="faviconGradient" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6366F1" /> <!-- Indigo-500 -->
+      <stop offset="100%" stop-color="#4338CA" /> <!-- Indigo-700 -->
+    </linearGradient>
+  </defs>
+
+  <!-- The "Back" Page (Input) - Lighter/Translucent representation -->
+  <!-- Positioned to create the right stem of the abstract 'F' -->
+  <path d="M28 12 H 48 C 50.2 12 52 13.8 52 16 V 48 L 40 36 V 12 Z" 
+        fill="url(#faviconGradient)" 
+        fill-opacity="0.5" />
+
+  <!-- The "Front" Page (Output) - Solid representation -->
+  <!-- Positioned to create the main body of the 'F' -->
+  <path d="M12 12 H 36 C 38.2 12 40 13.8 40 16 V 52 C 40 54.2 38.2 56 36 56 H 12 V 12 Z" 
+        fill="url(#faviconGradient)" />
+
+  <!-- The "Fold" (Action) - The distinctive dog-ear -->
+  <path d="M40 16 L 36 16 C 34.9 16 34 15.1 34 14 L 34 12" 
+        fill="#FFFFFF" 
+        fill-opacity="0.6"/>
+</svg>
