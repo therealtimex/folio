@@ -341,6 +341,38 @@ class HybridApiClient {
   getSDKChatProviders() {
     return this.expressRequest<{ success: boolean; providers: { provider: string; models: { id: string }[] }[] }>("/api/sdk/providers/chat");
   }
+
+  // ─── Ingestion / Funnel API ─────────────────────────────────────────────────
+
+  getIngestions(token?: string | null) {
+    return this.expressRequest<{ success: boolean; ingestions: any[] }>("/api/ingestions", {
+      auth: Boolean(token), token
+    });
+  }
+
+  uploadDocument(file: File, token?: string | null) {
+    const form = new FormData();
+    form.append("file", file);
+    const { expressApiUrl } = getApiConfig();
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    return fetch(`${expressApiUrl}/api/ingestions/upload`, { method: "POST", headers, body: form })
+      .then((r) => r.json()) as Promise<{ success: boolean; ingestion: any }>;
+  }
+
+  rerunIngestion(id: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; matched: boolean }>(`/api/ingestions/${id}/rerun`, {
+      method: "POST",
+      auth: Boolean(token), token
+    });
+  }
+
+  deleteIngestion(id: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean }>(`/api/ingestions/${id}`, {
+      method: "DELETE",
+      auth: Boolean(token), token
+    });
+  }
 }
 
 export const api = new HybridApiClient();

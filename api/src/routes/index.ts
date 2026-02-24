@@ -7,6 +7,7 @@ import setupRoutes from "./setup.js";
 import ttsRoutes from "./tts.js";
 import sdkRoutes from "./sdk.js";
 import policiesRoutes from "./policies.js";
+import ingestionsRoutes from "./ingestions.js";
 
 const router = Router();
 
@@ -17,5 +18,6 @@ router.use("/processing", processingRoutes);
 router.use("/tts", ttsRoutes);
 router.use("/sdk", sdkRoutes);
 router.use("/policies", policiesRoutes);
+router.use("/ingestions", ingestionsRoutes);
 
 export default router;

@@ -205,6 +205,65 @@ export class PolicyEngine {
     }
 
     /**
+     * Same as process() but uses a pre-loaded list of policies.
+     * Used by IngestionService so user-scoped policies are evaluated.
+     */
+    static async processWithPolicies(doc: DocumentObject, policies: FolioPolicy[]): Promise<ProcessingResult> {
+        logger.info(`Processing document with ${policies.length} policies: ${doc.filePath}`);
+
+        for (const policy of policies) {
+            try {
+                const matched = await matchPolicy(policy, doc);
+                if (!matched) continue;
+
+                logger.info(`Matched policy: ${policy.metadata.id}`);
+                const extractedData = await extractData(policy.spec.extract ?? [], doc);
+
+                const missingRequired = (policy.spec.extract ?? [])
+                    .filter((f) => f.required && extractedData[f.key] == null)
+                    .map((f) => f.key);
+
+                if (missingRequired.length > 0) {
+                    return {
+                        filePath: doc.filePath,
+                        matchedPolicy: policy.metadata.id,
+                        extractedData,
+                        actionsExecuted: [],
+                        status: "error",
+                        error: `Missing required fields: ${missingRequired.join(", ")}`
+                    };
+                }
+
+                const actuatorResult = await Actuator.execute(
+                    doc.filePath,
+                    policy.spec.actions ?? [],
+                    extractedData,
+                    policy.spec.extract ?? []
+                );
+
+                return {
+                    filePath: doc.filePath,
+                    matchedPolicy: policy.metadata.id,
+                    extractedData,
+                    actionsExecuted: actuatorResult.actionsExecuted,
+                    status: "matched",
+                    error: actuatorResult.errors[0]
+                };
+            } catch (err) {
+                logger.error(`Error evaluating policy ${policy.metadata.id}`, { err });
+            }
+        }
+
+        return {
+            filePath: doc.filePath,
+            matchedPolicy: null,
+            extractedData: {},
+            actionsExecuted: [],
+            status: "fallback"
+        };
+    }
+
+    /**
      * Synthesize a FolioPolicy from a natural language description using the LLM.
      */
     static async synthesizeFromNL(

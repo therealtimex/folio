@@ -14,6 +14,7 @@ import { MigrationBanner } from "./components/migration/MigrationBanner";
 import { MigrationModal } from "./components/migration/MigrationModal";
 import { clearSupabaseConfig, getConfigSource, getSupabaseConfig } from "./lib/supabase-config";
 import { PoliciesPage } from "./components/PoliciesPage";
+import { FunnelPage } from "./components/FunnelPage";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert";
@@ -30,10 +31,11 @@ import {
   User,
   AlertCircle,
   Loader2,
-  ScrollText
+  ScrollText,
+  Funnel
 } from "lucide-react";
 
-type Page = "dashboard" | "account" | "config";
+type Page = "dashboard" | "funnel" | "account" | "config";
 
 export function App() {
   const config = useMemo(() => getSupabaseConfig(), []);
@@ -218,6 +220,7 @@ export function App() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "funnel", label: "Funnel", icon: Funnel },
     { id: "policies", label: "Policies", icon: ScrollText },
     { id: "config", label: "Configuration", icon: Settings2 },
     { id: "account", label: "Account Settings", icon: User },
@@ -381,6 +384,9 @@ export function App() {
 
         {activePage === "dashboard" && (
           <Dashboard configSnapshot={configSnapshot} configSource={configSource} />
+        )}
+        {activePage === "funnel" && (
+          <FunnelPage />
         )}
         {activePage === "policies" && (
           <PoliciesPage />
