@@ -315,6 +315,14 @@ class HybridApiClient {
     });
   }
 
+  patchPolicy(id: string, patch: { enabled?: boolean; name?: string; description?: string; tags?: string[]; priority?: number }, token?: string | null) {
+    return this.expressRequest<{ success: boolean }>(`/api/policies/${id}`, {
+      method: "PATCH",
+      auth: Boolean(token), token,
+      body: JSON.stringify(patch)
+    });
+  }
+
   reloadPolicies(token?: string | null) {
     return this.expressRequest<{ success: boolean; count: number }>("/api/policies/reload", {
       method: "POST",

@@ -168,6 +168,53 @@ export class PolicyLoader {
     }
 
     /**
+     * Partially update a policy (enabled toggle, name, description, tags, priority).
+     */
+    static async patch(
+        policyId: string,
+        patch: { enabled?: boolean; name?: string; description?: string; tags?: string[]; priority?: number },
+        supabase?: SupabaseClient | null,
+        userId?: string
+    ): Promise<boolean> {
+        if (!supabase || !userId) {
+            throw new Error("Authentication required to update policies");
+        }
+
+        const { data: existing, error: fetchErr } = await supabase
+            .from("policies")
+            .select("metadata, priority, enabled")
+            .eq("policy_id", policyId)
+            .eq("user_id", userId)
+            .single();
+
+        if (fetchErr || !existing) throw new Error("Policy not found");
+
+        const updatedMetadata = {
+            ...existing.metadata,
+            ...(patch.name !== undefined && { name: patch.name }),
+            ...(patch.description !== undefined && { description: patch.description }),
+            ...(patch.tags !== undefined && { tags: patch.tags }),
+            ...(patch.priority !== undefined && { priority: patch.priority }),
+        };
+
+        const { error } = await supabase
+            .from("policies")
+            .update({
+                metadata: updatedMetadata,
+                enabled: patch.enabled ?? existing.enabled,
+                priority: patch.priority ?? existing.priority,
+            })
+            .eq("policy_id", policyId)
+            .eq("user_id", userId);
+
+        if (error) throw new Error(`Failed to patch policy: ${error.message}`);
+
+        this.invalidateCache();
+        logger.info(`Patched policy: ${policyId}`);
+        return true;
+    }
+
+    /**
      * Delete a policy by ID from Supabase.
      * Throws if no Supabase client is available.
      */

@@ -46,6 +46,21 @@ router.delete(
     })
 );
 
+// PATCH /api/policies/:id — partial update (enabled toggle, metadata fields)
+router.patch(
+    "/:id",
+    asyncHandler(async (req, res) => {
+        const { enabled, name, description, tags, priority } = req.body;
+        await PolicyLoader.patch(
+            req.params["id"] as string,
+            { enabled, name, description, tags, priority },
+            req.supabase,
+            req.user?.id
+        );
+        res.json({ success: true });
+    })
+);
+
 // POST /api/policies/reload — force cache invalidation
 router.post(
     "/reload",
