@@ -11,7 +11,7 @@ interface DashboardProps {
 
 export function Dashboard({ configSnapshot, configSource }: DashboardProps) {
     return (
-        <div className="space-y-12 animate-in fade-in duration-700">
+        <div className="w-full mx-auto px-8 py-10 space-y-12 animate-in fade-in duration-700">
             <div className="text-center space-y-3">
                 <h2 className="text-4xl font-black tracking-tight flex items-center justify-center gap-3">
                     <Logo className="w-10 h-10 animate-pulse" />
@@ -22,7 +22,7 @@ export function Dashboard({ configSnapshot, configSource }: DashboardProps) {
                 </p>
             </div>
 
-            <div className="max-w-4xl mx-auto space-y-10">
+            <div className="w-full space-y-10">
                 {/* Email Accounts equivalent section */}
                 <div className="space-y-6">
                     <div className="flex items-center gap-3 border-b pb-4">

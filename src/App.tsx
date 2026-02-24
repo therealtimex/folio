@@ -223,7 +223,6 @@ export function App() {
     { id: "funnel", label: "Funnel", icon: Funnel },
     { id: "policies", label: "Policies", icon: ScrollText },
     { id: "config", label: "Configuration", icon: Settings2 },
-    { id: "account", label: "Account Settings", icon: User },
   ];
 
   // --- Strict Gating Logic ---
@@ -370,7 +369,7 @@ export function App() {
         </div>
       </header>
 
-      <main className="flex-1 container max-w-5xl mx-auto px-6 py-12">
+      <main className="flex-1 w-full px-6 py-12 mx-auto max-w-[1600px]">
         {/* Global Connection Error */}
         {connectionError && (
           <Alert variant="destructive" className="mb-10 animate-in fade-in slide-in-from-top-4 duration-500">

@@ -140,7 +140,7 @@ export function FunnelPage() {
     };
 
     return (
-        <div className="max-w-[1200px] mx-auto px-8 py-10 space-y-8 animate-in fade-in duration-500">
+        <div className="w-full mx-auto px-8 py-10 space-y-8 animate-in fade-in duration-500">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
