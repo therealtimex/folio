@@ -13,7 +13,9 @@ import {
     ChevronDown,
     ChevronUp,
     Tag,
-    Cpu
+    Cpu,
+    X,
+    Zap
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -37,12 +39,20 @@ interface PolicyMetadata {
     tags?: string[];
 }
 
+interface PolicyAction {
+    type: string;
+    destination?: string;
+    pattern?: string;
+    path?: string;
+    columns?: string[];
+}
+
 interface FolioPolicy {
     metadata: PolicyMetadata;
     spec: {
         match: { strategy: string; conditions: { type: string; value?: string | string[] }[] };
         extract?: { key: string; type: string; required?: boolean }[];
-        actions?: { type: string; destination?: string; pattern?: string }[];
+        actions?: PolicyAction[];
     };
 }
 
@@ -81,7 +91,12 @@ const PACKS = [
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
-export function PoliciesPage() {
+interface PoliciesPageProps {
+    initialCompose?: string | null;
+    onInitialConsumed?: () => void;
+}
+
+export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPageProps) {
     const [policies, setPolicies] = useState<FolioPolicy[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [description, setDescription] = useState("");
@@ -96,6 +111,17 @@ export function PoliciesPage() {
     const [sessionToken, setSessionToken] = useState<string | null>(null);
     const [editingId, setEditingId] = useState<string | null>(null);
     const [editDraft, setEditDraft] = useState<{ name: string; description: string; tags: string; priority: number } | null>(null);
+    const [showQuickCreate, setShowQuickCreate] = useState(false);
+    const [quickForm, setQuickForm] = useState({
+        name: "",
+        description: "",
+        keywords: "",
+        matchStrategy: "ANY" as "ANY" | "ALL",
+        actions: [{ type: "move" as "move" | "rename" | "log_csv", destination: "" }],
+        tags: "",
+        priority: 100,
+    });
+    const [isQuickSaving, setIsQuickSaving] = useState(false);
 
     const fetchPolicies = useCallback(async () => {
         setIsLoading(true);
@@ -134,6 +160,13 @@ export function PoliciesPage() {
         fetchPolicies();
         fetchProviders();
     }, [fetchPolicies, fetchProviders]);
+
+    useEffect(() => {
+        if (initialCompose) {
+            setDescription(initialCompose);
+            onInitialConsumed?.();
+        }
+    }, [initialCompose, onInitialConsumed]);
 
     const handleSynthesize = async () => {
         if (!description.trim()) return;
@@ -247,6 +280,82 @@ export function PoliciesPage() {
         await api.reloadPolicies?.(sessionToken);
         await fetchPolicies();
         toast.success("Policies reloaded.");
+    };
+
+    const updateQuickAction = (index: number, field: "type" | "destination", value: string) => {
+        setQuickForm((prev) => {
+            const actions = prev.actions.map((a, i) =>
+                i === index ? { ...a, [field]: value } : a
+            );
+            return { ...prev, actions };
+        });
+    };
+
+    const addQuickAction = () => {
+        setQuickForm((prev) => ({
+            ...prev,
+            actions: [...prev.actions, { type: "move" as const, destination: "" }],
+        }));
+    };
+
+    const removeQuickAction = (index: number) => {
+        setQuickForm((prev) => ({
+            ...prev,
+            actions: prev.actions.filter((_, i) => i !== index),
+        }));
+    };
+
+    const handleQuickCreate = async () => {
+        if (!quickForm.name.trim()) return;
+        setIsQuickSaving(true);
+        try {
+            const id = quickForm.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+            const keywords = quickForm.keywords.split(",").map((k) => k.trim()).filter(Boolean);
+            const tags = quickForm.tags.split(",").map((t) => t.trim()).filter(Boolean);
+
+            const builtActions: PolicyAction[] = quickForm.actions
+                .filter((a) => a.destination.trim())
+                .map((a) => {
+                    const action: PolicyAction = { type: a.type };
+                    if (a.type === "move" || a.type === "rename") {
+                        action.destination = a.destination;
+                    } else if (a.type === "log_csv") {
+                        action.path = a.destination;
+                    }
+                    return action;
+                });
+
+            const policy: FolioPolicy = {
+                metadata: {
+                    id,
+                    name: quickForm.name.trim(),
+                    description: quickForm.description.trim(),
+                    priority: quickForm.priority,
+                    tags,
+                    enabled: true,
+                },
+                spec: {
+                    match: {
+                        strategy: quickForm.matchStrategy,
+                        conditions: keywords.length > 0
+                            ? [{ type: "keyword", value: keywords }]
+                            : [{ type: "keyword", value: [] }],
+                    },
+                    extract: [],
+                    actions: builtActions,
+                },
+            };
+
+            await api.savePolicy?.(policy, sessionToken);
+            toast.success(`Policy "${policy.metadata.name}" created.`);
+            setShowQuickCreate(false);
+            setQuickForm({ name: "", description: "", keywords: "", matchStrategy: "ANY", actions: [{ type: "move", destination: "" }], tags: "", priority: 100 });
+            await fetchPolicies();
+        } catch {
+            toast.error("Failed to create policy.");
+        } finally {
+            setIsQuickSaving(false);
+        }
     };
 
 
@@ -406,7 +515,161 @@ export function PoliciesPage() {
                             <h2 className="text-xs font-black uppercase tracking-widest text-muted-foreground">
                                 Active Policies ({policies.length})
                             </h2>
+                            <Button
+                                size="sm"
+                                variant={showQuickCreate ? "secondary" : "outline"}
+                                onClick={() => setShowQuickCreate((v) => !v)}
+                                className="h-7 px-3 rounded-xl gap-1.5 text-[10px] font-black uppercase tracking-widest"
+                            >
+                                {showQuickCreate ? (
+                                    <><X className="w-3 h-3" />Cancel</>
+                                ) : (
+                                    <><Zap className="w-3 h-3" />Quick Create</>
+                                )}
+                            </Button>
                         </div>
+
+                        {/* Quick Create Inline Form */}
+                        {showQuickCreate && (
+                            <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5 space-y-4 animate-in slide-in-from-top-2 duration-200">
+                                <div className="flex items-center gap-2">
+                                    <Zap className="w-3.5 h-3.5 text-primary" />
+                                    <span className="text-xs font-black uppercase tracking-widest text-primary">Quick Create Policy</span>
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div className="col-span-2 space-y-1">
+                                        <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Name *</Label>
+                                        <Input
+                                            placeholder="e.g. Tesla Invoice Handler"
+                                            value={quickForm.name}
+                                            onChange={(e) => setQuickForm({ ...quickForm, name: e.target.value })}
+                                            className="h-8 text-sm rounded-xl border-border/40 bg-background"
+                                        />
+                                    </div>
+
+                                    <div className="col-span-2 space-y-1">
+                                        <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Description</Label>
+                                        <Input
+                                            placeholder="What does this policy do?"
+                                            value={quickForm.description}
+                                            onChange={(e) => setQuickForm({ ...quickForm, description: e.target.value })}
+                                            className="h-8 text-xs rounded-xl border-border/40 bg-background"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Match Keywords</Label>
+                                        <Input
+                                            placeholder="tesla, invoice, PG&E (comma-sep)"
+                                            value={quickForm.keywords}
+                                            onChange={(e) => setQuickForm({ ...quickForm, keywords: e.target.value })}
+                                            className="h-8 text-xs rounded-xl border-border/40 bg-background"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Match Strategy</Label>
+                                        <select
+                                            value={quickForm.matchStrategy}
+                                            onChange={(e) => setQuickForm({ ...quickForm, matchStrategy: e.target.value as "ANY" | "ALL" })}
+                                            className="h-8 w-full text-xs rounded-xl border border-border/40 bg-background px-3 text-foreground"
+                                        >
+                                            <option value="ANY">ANY keyword matches</option>
+                                            <option value="ALL">ALL keywords match</option>
+                                        </select>
+                                    </div>
+
+                                    <div className="col-span-2 space-y-2">
+                                        <div className="flex items-center justify-between">
+                                            <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Actions</Label>
+                                            <button
+                                                type="button"
+                                                onClick={addQuickAction}
+                                                className="flex items-center gap-1 text-[10px] font-bold text-primary hover:text-primary/80 transition-colors"
+                                            >
+                                                <Plus className="w-3 h-3" />Add Action
+                                            </button>
+                                        </div>
+                                        <div className="space-y-2">
+                                            {quickForm.actions.map((action, i) => (
+                                                <div key={i} className="flex gap-2 items-center">
+                                                    <select
+                                                        value={action.type}
+                                                        onChange={(e) => updateQuickAction(i, "type", e.target.value)}
+                                                        className="h-8 text-xs rounded-xl border border-border/40 bg-background px-2 text-foreground w-36 shrink-0"
+                                                    >
+                                                        <option value="move">Move to folder</option>
+                                                        <option value="rename">Rename file</option>
+                                                        <option value="log_csv">Log to CSV</option>
+                                                    </select>
+                                                    <Input
+                                                        placeholder={action.type === "move" ? "/Car/" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
+                                                        value={action.destination}
+                                                        onChange={(e) => updateQuickAction(i, "destination", e.target.value)}
+                                                        className="h-8 text-xs rounded-xl border-border/40 bg-background font-mono flex-1"
+                                                    />
+                                                    {quickForm.actions.length > 1 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeQuickAction(i)}
+                                                            className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-1"
+                                                        >
+                                                            <X className="w-3.5 h-3.5" />
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Tags</Label>
+                                        <Input
+                                            placeholder="finance, cars (comma-sep)"
+                                            value={quickForm.tags}
+                                            onChange={(e) => setQuickForm({ ...quickForm, tags: e.target.value })}
+                                            className="h-8 text-xs rounded-xl border-border/40 bg-background"
+                                        />
+                                    </div>
+
+                                    <div className="space-y-1">
+                                        <Label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Priority</Label>
+                                        <Input
+                                            type="number"
+                                            min={1}
+                                            max={999}
+                                            value={quickForm.priority}
+                                            onChange={(e) => setQuickForm({ ...quickForm, priority: Number(e.target.value) })}
+                                            className="h-8 text-xs rounded-xl border-border/40 bg-background"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-2 pt-1">
+                                    <Button
+                                        size="sm"
+                                        onClick={handleQuickCreate}
+                                        disabled={isQuickSaving || !quickForm.name.trim()}
+                                        className="flex-1 h-8 rounded-xl font-black text-[10px] uppercase tracking-widest gap-1.5"
+                                    >
+                                        {isQuickSaving ? (
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                        ) : (
+                                            <><Plus className="w-3 h-3" />Create Policy</>
+                                        )}
+                                    </Button>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => setShowQuickCreate(false)}
+                                        className="h-8 px-3 rounded-xl"
+                                    >
+                                        Cancel
+                                    </Button>
+                                </div>
+                            </div>
+                        )}
 
                         {isLoading ? (
                             <div className="flex items-center justify-center py-16 text-muted-foreground">

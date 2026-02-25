@@ -69,7 +69,11 @@ function fileSize(bytes?: number) {
 
 // ─── FunnelPage ───────────────────────────────────────────────────────────────
 
-export function FunnelPage() {
+interface FunnelPageProps {
+    onComposePolicyForDoc?: (description: string) => void;
+}
+
+export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
     const [ingestions, setIngestions] = useState<Ingestion[]>([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isDragging, setIsDragging] = useState(false);
@@ -270,6 +274,13 @@ export function FunnelPage() {
                         setSelected(null);
                         toast.success("Re-running ingestion…");
                     }}
+                    onComposePolicy={onComposePolicyForDoc
+                        ? (description) => {
+                            setSelected(null);
+                            onComposePolicyForDoc(description);
+                        }
+                        : undefined
+                    }
                 />
             )}
         </div>

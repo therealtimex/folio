@@ -35,12 +35,13 @@ import {
   Funnel
 } from "lucide-react";
 
-type Page = "dashboard" | "funnel" | "account" | "config";
+type Page = "dashboard" | "funnel" | "policies" | "account" | "config";
 
 export function App() {
   const config = useMemo(() => getSupabaseConfig(), []);
 
   const [activePage, setActivePage] = useState<Page>("dashboard");
+  const [composeDescription, setComposeDescription] = useState<string | null>(null);
   const [setupOpen, setSetupOpen] = useState(!config);
   const [healthOpen, setHealthOpen] = useState(false);
   const [health, setHealth] = useState("not_checked");
@@ -385,10 +386,18 @@ export function App() {
           <Dashboard configSnapshot={configSnapshot} configSource={configSource} />
         )}
         {activePage === "funnel" && (
-          <FunnelPage />
+          <FunnelPage
+            onComposePolicyForDoc={(description) => {
+              setComposeDescription(description);
+              setActivePage("policies");
+            }}
+          />
         )}
         {activePage === "policies" && (
-          <PoliciesPage />
+          <PoliciesPage
+            initialCompose={composeDescription}
+            onInitialConsumed={() => setComposeDescription(null)}
+          />
         )}
         {activePage === "config" && (
           <Configuration />

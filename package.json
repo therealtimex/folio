@@ -36,7 +36,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx --max-warnings=0",
-    "migrate": "bash ./scripts/migrate.sh"
+    "migrate": "bash ./scripts/migrate.sh",
+    "task": "node scripts/dev-task.mjs"
   },
   "keywords": [
     "folio",

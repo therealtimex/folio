@@ -7,7 +7,8 @@ import {
     Minus,
     Clock,
     Loader2,
-    FileText
+    FileText,
+    Sparkles
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -18,6 +19,7 @@ interface Props {
     ingestion: Ingestion;
     onClose: () => void;
     onRerun: () => Promise<void>;
+    onComposePolicy?: (description: string) => void;
 }
 
 function StatusIcon({ status }: { status: Ingestion["status"] }) {
@@ -35,7 +37,20 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
     return <div className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground mb-1.5">{children}</div>;
 }
 
-export function IngestionDetailModal({ ingestion: ing, onClose, onRerun }: Props) {
+function buildComposeDescription(ing: Ingestion): string {
+    const parts: string[] = [];
+    parts.push(`I have a document named "${ing.filename}" that wasn't matched by any policy.`);
+    if (ing.mime_type) parts.push(`It is a ${ing.mime_type} file.`);
+    const extracted = ing.extracted ? Object.entries(ing.extracted).filter(([, v]) => v != null) : [];
+    if (extracted.length > 0) {
+        const fieldSummary = extracted.map(([k, v]) => `${k}: ${String(v)}`).join(", ");
+        parts.push(`Partial data already extracted: ${fieldSummary}.`);
+    }
+    parts.push("Create a policy to handle this type of document — infer the document type, define match conditions, extract key fields, and route it to an appropriate folder.");
+    return parts.join(" ");
+}
+
+export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onComposePolicy }: Props) {
     const extracted = ing.extracted && Object.keys(ing.extracted).length > 0 ? ing.extracted : null;
     const actions = ing.actions_taken?.length ? ing.actions_taken : null;
 
@@ -127,9 +142,21 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun }: Props
 
                 {/* Footer */}
                 <div className="flex items-center justify-between px-6 py-4 border-t bg-muted/20">
-                    <Button variant="outline" size="sm" onClick={onRerun} className="gap-2 rounded-xl">
-                        <RefreshCw className="w-3.5 h-3.5" />Re-run
-                    </Button>
+                    <div className="flex items-center gap-2">
+                        <Button variant="outline" size="sm" onClick={onRerun} className="gap-2 rounded-xl">
+                            <RefreshCw className="w-3.5 h-3.5" />Re-run
+                        </Button>
+                        {ing.status === "no_match" && onComposePolicy && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onComposePolicy(buildComposeDescription(ing))}
+                                className="gap-2 rounded-xl border-primary/30 text-primary hover:bg-primary/5 hover:text-primary"
+                            >
+                                <Sparkles className="w-3.5 h-3.5" />Create Policy
+                            </Button>
+                        )}
+                    </div>
                     <Button variant="ghost" size="sm" onClick={onClose} className="rounded-xl">Close</Button>
                 </div>
             </div>

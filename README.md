@@ -55,6 +55,7 @@ node ./bin/folio.js --port 5176
 - `npm run dev:api` - local backend (tsx watch)
 - `npm run build` - UI + API build
 - `npm run migrate` - push Supabase migrations/functions
+- `npm run task "Title" "Body"` - create a task for the Gemini agent (via GitHub CLI)
 
 ## Setup Wizard Flow
 
