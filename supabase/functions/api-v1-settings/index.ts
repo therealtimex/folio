@@ -35,7 +35,9 @@ Deno.serve(async (req: Request) => {
         tts_speed: body.tts_speed,
         tts_quality: body.tts_quality,
         embedding_provider: body.embedding_provider,
-        embedding_model: body.embedding_model
+        embedding_provider: body.embedding_provider,
+        embedding_model: body.embedding_model,
+        storage_path: body.storage_path
       };
 
       const { data, error } = await client

@@ -1,5 +1,8 @@
 import { Router } from "express";
 import multer from "multer";
+import os from "os";
+import path from "path";
+import fs from "fs/promises";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { optionalAuth } from "../middleware/auth.js";
 import { IngestionService } from "../services/IngestionService.js";
@@ -54,8 +57,22 @@ router.post(
             return;
         }
 
-        // Extract text — for now use the raw buffer as string (works for .txt, .md)
-        // PDF/DOCX extraction would need extra libraries
+        // Fetch user configured Storage Path (Dropzone)
+        const { data: settings } = await req.supabase
+            .from("user_settings")
+            .select("storage_path")
+            .eq("user_id", req.user.id)
+            .maybeSingle();
+
+        const dropzoneDir = settings?.storage_path || path.join(os.homedir(), ".realtimex", "folio", "dropzone");
+        await fs.mkdir(dropzoneDir, { recursive: true });
+
+        // Save physical file
+        const safeFilename = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
+        const filePath = path.join(dropzoneDir, safeFilename);
+        await fs.writeFile(filePath, file.buffer);
+
+        // Extract text (mock extraction for pdfs, works for text files)
         const content = file.buffer.toString("utf-8").replace(/\0/g, "").slice(0, 50_000);
 
         const ingestion = await IngestionService.ingest({
@@ -65,7 +82,8 @@ router.post(
             mimeType: file.mimetype,
             fileSize: file.size,
             source: "upload",
-            content,
+            filePath,
+            content // Keeping content for local PolicyEngine fallback
         });
 
         res.status(201).json({ success: true, ingestion });

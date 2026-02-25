@@ -353,10 +353,13 @@ class HybridApiClient {
   uploadDocument(file: File, token?: string | null) {
     const form = new FormData();
     form.append("file", file);
-    const { expressApiUrl } = getApiConfig();
-    const headers: Record<string, string> = {};
+    const config = getApiConfig();
+    const headers: Record<string, string> = {
+      "X-Supabase-Url": config.edgeFunctionsUrl.replace("/functions/v1", ""),
+      "X-Supabase-Anon-Key": config.anonKey
+    };
     if (token) headers["Authorization"] = `Bearer ${token}`;
-    return fetch(`${expressApiUrl}/api/ingestions/upload`, { method: "POST", headers, body: form })
+    return fetch(`${config.expressApiUrl}/api/ingestions/upload`, { method: "POST", headers, body: form })
       .then((r) => r.json()) as Promise<{ success: boolean; ingestion: any }>;
   }
 
