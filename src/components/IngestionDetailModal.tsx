@@ -39,14 +39,19 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 
 function buildComposeDescription(ing: Ingestion): string {
     const parts: string[] = [];
-    parts.push(`I have a document named "${ing.filename}" that wasn't matched by any policy.`);
+    if (ing.status === "no_match") {
+        parts.push(`I have a document named "${ing.filename}" that wasn't matched by any policy.`);
+    } else {
+        parts.push(`I have a document named "${ing.filename}" that matched a policy, but I want to create a better, more specific policy for it.`);
+    }
+
     if (ing.mime_type) parts.push(`It is a ${ing.mime_type} file.`);
     const extracted = ing.extracted ? Object.entries(ing.extracted).filter(([, v]) => v != null) : [];
     if (extracted.length > 0) {
         const fieldSummary = extracted.map(([k, v]) => `${k}: ${String(v)}`).join(", ");
         parts.push(`Partial data already extracted: ${fieldSummary}.`);
     }
-    parts.push("Create a policy to handle this type of document — infer the document type, define match conditions, extract key fields, and route it to an appropriate folder.");
+    parts.push("Create a policy to handle this exact type of document — infer the document type, define strict match conditions, extract key fields, and route it to an appropriate folder.");
     return parts.join(" ");
 }
 
@@ -146,7 +151,7 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onCompo
                         <Button variant="outline" size="sm" onClick={onRerun} className="gap-2 rounded-xl">
                             <RefreshCw className="w-3.5 h-3.5" />Re-run
                         </Button>
-                        {ing.status === "no_match" && onComposePolicy && (
+                        {onComposePolicy && (
                             <Button
                                 variant="outline"
                                 size="sm"

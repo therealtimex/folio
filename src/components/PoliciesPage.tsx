@@ -117,7 +117,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
         description: "",
         keywords: "",
         matchStrategy: "ANY" as "ANY" | "ALL",
-        actions: [{ type: "move" as "move" | "rename" | "log_csv", destination: "" }],
+        actions: [{ type: "copy" as "copy" | "rename" | "log_csv", destination: "" }],
         tags: "",
         priority: 100,
     });
@@ -294,7 +294,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
     const addQuickAction = () => {
         setQuickForm((prev) => ({
             ...prev,
-            actions: [...prev.actions, { type: "move" as const, destination: "" }],
+            actions: [...prev.actions, { type: "copy" as const, destination: "" }],
         }));
     };
 
@@ -317,7 +317,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                 .filter((a) => a.destination.trim())
                 .map((a) => {
                     const action: PolicyAction = { type: a.type };
-                    if (a.type === "move" || a.type === "rename") {
+                    if (a.type === "copy" || a.type === "rename") {
                         action.destination = a.destination;
                     } else if (a.type === "log_csv") {
                         action.path = a.destination;
@@ -349,7 +349,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             await api.savePolicy?.(policy, sessionToken);
             toast.success(`Policy "${policy.metadata.name}" created.`);
             setShowQuickCreate(false);
-            setQuickForm({ name: "", description: "", keywords: "", matchStrategy: "ANY", actions: [{ type: "move", destination: "" }], tags: "", priority: 100 });
+            setQuickForm({ name: "", description: "", keywords: "", matchStrategy: "ANY", actions: [{ type: "copy", destination: "" }], tags: "", priority: 100 });
             await fetchPolicies();
         } catch {
             toast.error("Failed to create policy.");
@@ -599,12 +599,12 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                                         onChange={(e) => updateQuickAction(i, "type", e.target.value)}
                                                         className="h-8 text-xs rounded-xl border border-border/40 bg-background px-2 text-foreground w-36 shrink-0"
                                                     >
-                                                        <option value="move">Move to folder</option>
+                                                        <option value="copy">Copy to folder</option>
                                                         <option value="rename">Rename file</option>
                                                         <option value="log_csv">Log to CSV</option>
                                                     </select>
                                                     <Input
-                                                        placeholder={action.type === "move" ? "/Car/" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
+                                                        placeholder={action.type === "copy" ? "/Car/" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
                                                         value={action.destination}
                                                         onChange={(e) => updateQuickAction(i, "destination", e.target.value)}
                                                         className="h-8 text-xs rounded-xl border-border/40 bg-background font-mono flex-1"

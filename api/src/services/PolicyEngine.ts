@@ -576,7 +576,7 @@ Return ONLY a valid JSON object with this exact shape (no markdown, no backticks
   "spec": {
     "match": { "strategy": "ALL", "conditions": [{ "type": "keyword", "value": ["keyword1", "keyword2"], "case_sensitive": false }] },
     "extract": [{ "key": "field_name", "type": "string", "description": "what to extract", "required": true }],
-    "actions": [{ "type": "move", "destination": "/path/to/folder" }]
+    "actions": [{ "type": "copy", "destination": "/path/to/folder" }]
   }
 }`;
 
