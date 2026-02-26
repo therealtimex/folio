@@ -42,7 +42,7 @@ export function ManagedOrgStep({
       <div className="space-y-2">
         <h2 className="text-3xl font-bold tracking-tight">Provisioning Parameters</h2>
         <p className="text-muted-foreground text-sm">
-          Choose an organization and project configuration for Folio foundation deployment.
+          Choose an organization and project configuration for Folio deployment.
         </p>
       </div>
 

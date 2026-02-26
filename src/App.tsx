@@ -46,7 +46,7 @@ export function App() {
   const [setupOpen, setSetupOpen] = useState(!config);
   const [healthOpen, setHealthOpen] = useState(false);
   const [health, setHealth] = useState("not_checked");
-  const [log, setLog] = useState("Folio foundation ready. Run setup to configure runtime contracts.");
+  const [log, setLog] = useState("Folio ready. Run setup to configure runtime contracts.");
 
   const [configSnapshot, setConfigSnapshot] = useState(config);
   const configSource = getConfigSource();
@@ -299,7 +299,7 @@ export function App() {
                 <Logo className="w-8 h-8" />
               </div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl font-bold tracking-tight text-foreground/90">Folio Foundation</h1>
+                <h1 className="text-xl font-bold tracking-tight text-foreground/90">Folio</h1>
                 <div className="flex items-center">
                   <span className="relative flex h-2 w-2">
                     <span className={cn(

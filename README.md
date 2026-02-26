@@ -1,4 +1,4 @@
-# Folio Foundation
+# Folio
 
 Folio inherits the runtime foundation from `email-automator` with Folio-specific naming and no business features implemented yet.
 

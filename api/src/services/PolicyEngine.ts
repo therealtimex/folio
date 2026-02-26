@@ -1,3 +1,4 @@
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createLogger } from "../utils/logger.js";
 import { SDKService } from "./SDKService.js";
 import { PolicyLoader } from "./PolicyLoader.js";
@@ -19,6 +20,8 @@ export interface DocumentObject {
     ingestionId: string;
     /** ID of the user */
     userId: string;
+    /** Authenticated Supabase client used for RLS-safe event writes */
+    supabase?: SupabaseClient;
 }
 
 export interface TraceLog {
@@ -89,7 +92,7 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
         if (!prompt) return false;
 
         trace.push({ timestamp: new Date().toISOString(), step: `Evaluating ${condition.type} condition`, details: { prompt } });
-        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: `Evaluating ${condition.type} condition`, prompt });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: `Evaluating ${condition.type} condition`, prompt }, doc.supabase);
 
         try {
             const { provider, model } = await SDKService.resolveChatProvider(settings);
@@ -117,7 +120,7 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
                 const threshold = condition.confidence_threshold ?? 0.8;
                 const passed = parsed.result === true && (parsed.confidence ?? 1) >= threshold;
                 trace.push({ timestamp: new Date().toISOString(), step: `${condition.type} result`, details: { parsed, passed } });
-                Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: `${condition.type} result`, parsed, passed });
+                Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: `${condition.type} result`, parsed, passed }, doc.supabase);
                 return passed;
             }
         } catch (err) {
@@ -133,18 +136,18 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
 async function matchPolicy(policy: FolioPolicy, doc: DocumentObject, trace: TraceLog[], settings: { llm_provider?: string; llm_model?: string } = {}): Promise<boolean> {
     const { strategy, conditions } = policy.spec.match;
     trace.push({ timestamp: new Date().toISOString(), step: `Evaluating policy rules`, details: { policyId: policy.metadata.id, strategy, conditionsCount: conditions.length } });
-    Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "Evaluating policy rules", policyId: policy.metadata.id, strategy, conditionsCount: conditions.length });
+    Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "Evaluating policy rules", policyId: policy.metadata.id, strategy, conditionsCount: conditions.length }, doc.supabase);
 
     if (strategy === "ALL") {
         for (const cond of conditions) {
             if (!(await evaluateCondition(cond, doc, trace, settings))) {
                 trace.push({ timestamp: new Date().toISOString(), step: `Match failed on condition`, details: { condition: cond } });
-                Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "Match failed on condition", condition: cond });
+                Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "Match failed on condition", condition: cond }, doc.supabase);
                 return false;
             }
         }
         trace.push({ timestamp: new Date().toISOString(), step: `All conditions matched`, details: { policyId: policy.metadata.id } });
-        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "All conditions matched", policyId: policy.metadata.id });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "All conditions matched", policyId: policy.metadata.id }, doc.supabase);
         return true;
     }
 
@@ -152,12 +155,12 @@ async function matchPolicy(policy: FolioPolicy, doc: DocumentObject, trace: Trac
     for (const cond of conditions) {
         if (await evaluateCondition(cond, doc, trace, settings)) {
             trace.push({ timestamp: new Date().toISOString(), step: `Condition matched (ANY strategy)`, details: { condition: cond } });
-            Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "Condition matched (ANY strategy)", condition: cond });
+            Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "Condition matched (ANY strategy)", condition: cond }, doc.supabase);
             return true;
         }
     }
     trace.push({ timestamp: new Date().toISOString(), step: `No conditions matched (ANY strategy)` });
-    Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "No conditions matched (ANY strategy)" });
+    Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", { action: "No conditions matched (ANY strategy)" }, doc.supabase);
     return false;
 }
 
@@ -172,7 +175,7 @@ async function extractData(
     const sdk = SDKService.getSDK();
     if (!sdk || fields.length === 0) return {};
     trace.push({ timestamp: new Date().toISOString(), step: "Starting data extraction", details: { fieldsCount: fields.length } });
-    Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Data Extraction", { action: "Starting data extraction", fieldsCount: fields.length });
+    Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Data Extraction", { action: "Starting data extraction", fieldsCount: fields.length }, doc.supabase);
 
     const { provider, model } = await SDKService.resolveChatProvider(settings);
     const fieldDescriptions = fields
@@ -201,13 +204,13 @@ ${doc.text.slice(0, 3000)}`;
         if (match) {
             const parsed = JSON.parse(match[0]);
             trace.push({ timestamp: new Date().toISOString(), step: "Data extracted successfully", details: { extractedKeys: Object.keys(parsed) } });
-            Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Data Extraction", { action: "Data extracted successfully", extractedKeys: Object.keys(parsed), raw_response: parsed });
+            Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Data Extraction", { action: "Data extracted successfully", extractedKeys: Object.keys(parsed), raw_response: parsed }, doc.supabase);
             return parsed;
         }
     } catch (err) {
         logger.error("Data extraction failed", { err });
         trace.push({ timestamp: new Date().toISOString(), step: "Data extraction failed", details: { error: String(err) } });
-        Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Data extraction failed", error: String(err) });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Data extraction failed", error: String(err) }, doc.supabase);
     }
 
     return {};
@@ -224,7 +227,7 @@ export class PolicyEngine {
         logger.info(`Processing document: ${doc.filePath}`);
         const policies = await PolicyLoader.load();
         const globalTrace: TraceLog[] = [{ timestamp: new Date().toISOString(), step: "Loaded policies", details: { count: policies.length } }];
-        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "Loaded policies", count: policies.length });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "Loaded policies", count: policies.length }, doc.supabase);
 
         for (const policy of policies) {
             try {
@@ -243,7 +246,7 @@ export class PolicyEngine {
 
                 if (missingRequired.length > 0) {
                     globalTrace.push({ timestamp: new Date().toISOString(), step: "Missing required fields", details: { missingRequired } });
-                    Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Missing required fields", missingRequired });
+                    Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Missing required fields", missingRequired }, doc.supabase);
                     logger.warn(`Missing required fields: ${missingRequired.join(", ")} — routing to Human Review`);
                     return {
                         filePath: doc.filePath,
@@ -262,7 +265,9 @@ export class PolicyEngine {
                     doc.userId,
                     policy.spec.actions ?? [],
                     extractedData,
-                    { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath }
+                    { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
+                    policy.spec.extract ?? [],
+                    doc.supabase
                 );
 
                 globalTrace.push(...actuatorResult.trace);
@@ -285,7 +290,7 @@ export class PolicyEngine {
 
         // Fallback: Inbox Zero
         globalTrace.push({ timestamp: new Date().toISOString(), step: "No policy matched - routed to fallback" });
-        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "No policy matched - routed to fallback" });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "No policy matched - routed to fallback" }, doc.supabase);
         logger.info(`No policy matched — routing to fallback`);
         return {
             filePath: doc.filePath,
@@ -304,7 +309,7 @@ export class PolicyEngine {
     static async processWithPolicies(doc: DocumentObject, policies: FolioPolicy[], settings: { llm_provider?: string; llm_model?: string } = {}): Promise<ProcessingResult> {
         logger.info(`Processing document with ${policies.length} policies: ${doc.filePath}`);
         const globalTrace: TraceLog[] = [{ timestamp: new Date().toISOString(), step: "Loaded user policies", details: { count: policies.length } }];
-        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "Loaded user policies", count: policies.length });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "Loaded user policies", count: policies.length }, doc.supabase);
 
         for (const policy of policies) {
             try {
@@ -320,7 +325,7 @@ export class PolicyEngine {
 
                 if (missingRequired.length > 0) {
                     globalTrace.push({ timestamp: new Date().toISOString(), step: "Missing required fields", details: { missingRequired } });
-                    Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Missing required fields", missingRequired });
+                    Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Missing required fields", missingRequired }, doc.supabase);
                     return {
                         filePath: doc.filePath,
                         matchedPolicy: policy.metadata.id,
@@ -337,7 +342,9 @@ export class PolicyEngine {
                     doc.userId,
                     policy.spec.actions ?? [],
                     extractedData,
-                    { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath }
+                    { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
+                    policy.spec.extract ?? [],
+                    doc.supabase
                 );
 
                 globalTrace.push(...actuatorResult.trace);
@@ -357,7 +364,7 @@ export class PolicyEngine {
         }
 
         globalTrace.push({ timestamp: new Date().toISOString(), step: "No policy matched - routed to fallback" });
-        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "No policy matched - routed to fallback" });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "No policy matched - routed to fallback" }, doc.supabase);
         return {
             filePath: doc.filePath,
             matchedPolicy: null,
@@ -440,11 +447,11 @@ export class PolicyEngine {
                 : [];
 
             logger.info(`Baseline extraction complete — ${Object.keys(entities).length} fields, ${uncertain_fields.length} uncertain`);
-            Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Baseline Extraction", { action: "Baseline extraction complete", fields: Object.keys(entities).length, uncertain: uncertain_fields.length, extracted: entities });
+            Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Baseline Extraction", { action: "Baseline extraction complete", fields: Object.keys(entities).length, uncertain: uncertain_fields.length, extracted: entities }, doc.supabase);
             return { entities, uncertain_fields };
         } catch (err) {
             logger.error("Baseline extraction failed", { err });
-            Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Baseline Extraction", { action: "Baseline extraction failed", error: String(err) });
+            Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Baseline Extraction", { action: "Baseline extraction failed", error: String(err) }, doc.supabase);
             return { entities: {}, uncertain_fields: [] };
         }
     }

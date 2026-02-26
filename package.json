@@ -48,7 +48,7 @@
     "document-automation"
   ],
   "license": "MIT",
-  "description": "Folio foundation: local desktop app + remote Supabase + RealTimeX SDK backend runtime",
+  "description": "Folio: local desktop app + remote Supabase + RealTimeX SDK backend runtime",
   "engines": {
     "node": ">=20.0.0"
   },

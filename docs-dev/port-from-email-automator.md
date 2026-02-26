@@ -1,4 +1,4 @@
-# Folio Foundation Port Map
+# Folio Port Map
 
 This document maps what was intentionally inherited from `email-automator` into Folio before adding product features.
 

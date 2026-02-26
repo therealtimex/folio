@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from "react";
-import { X, Maximize2, Minimize2, Terminal as TerminalIcon, ShieldAlert, Cpu, Activity, Play, CheckCircle2, CheckCircle, Brain, Database, FileDigit, Globe, Image, Settings2 } from "lucide-react";
+import { Minimize2, Terminal as TerminalIcon, ShieldAlert, Cpu, Activity, Play, CheckCircle2, Brain, FileDigit, Settings2 } from "lucide-react";
 import { getSupabaseClient } from "../lib/supabase-config";
 import { useTerminal } from "../context/TerminalContext";
 
@@ -15,7 +15,7 @@ export type ProcessingEvent = {
 
 export function LiveTerminal() {
     const supabase = getSupabaseClient();
-    const { isExpanded, setIsExpanded, closeTerminal } = useTerminal();
+    const { isExpanded, openTerminal, closeTerminal } = useTerminal();
 
     // We want the newest events FIRST in the array
     const [events, setEvents] = useState<ProcessingEvent[]>([]);
@@ -77,14 +77,18 @@ export function LiveTerminal() {
                             setExpandedErrors(prev => new Set(prev).add(newEvent.id));
                         }
 
+                        if (!newEvent.details?.is_completion) {
+                            openTerminal();
+                        }
+
                         setEvents((prev) => {
                             // Insert at the beginning (descending order)
                             const updated = [newEvent, ...prev];
 
-                            // Auto-collapse logic: If it's a completion event and terminal is expanded
-                            if (newEvent.details?.is_completion && isExpanded) {
+                            // Auto-collapse logic after explicit completion events.
+                            if (newEvent.details?.is_completion) {
                                 setTimeout(() => {
-                                    if (mounted) setIsExpanded(false);
+                                    if (mounted) closeTerminal();
                                 }, 3000);
                             }
 
@@ -108,7 +112,7 @@ export function LiveTerminal() {
                 if (channel && supabase) supabase.removeChannel(channel);
             });
         };
-    }, [supabase, isExpanded, setIsExpanded]);
+    }, [supabase, openTerminal, closeTerminal]);
 
 
     // Toggle error details
@@ -155,9 +159,10 @@ export function LiveTerminal() {
 
     if (!isExpanded) {
         return (
-            <div
+            <button
+                type="button"
                 className={`fixed bottom-4 right-4 z-50 bg-[#0A0D14] border border-white/10 rounded-full py-2 px-4 shadow-xl flex items-center gap-3 cursor-pointer transition-all hover:bg-[#11141D] hover:border-white/20`}
-                onClick={() => setIsExpanded(true)}
+                onClick={openTerminal}
             >
                 <div className="relative">
                     <TerminalIcon className={`w-4 h-4 ${isSyncing ? 'text-emerald-400' : 'text-zinc-400'}`} />
@@ -172,7 +177,7 @@ export function LiveTerminal() {
                     </span>
                 </div>
                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-500/50 shadow-[0_0_8px_rgba(16,185,129,0.5)] ml-1" />
-            </div>
+            </button>
         );
     }
 

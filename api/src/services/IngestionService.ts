@@ -111,7 +111,7 @@ export class IngestionService {
         if (insertErr || !ingestion) throw new Error(`Failed to create ingestion record: ${insertErr?.message}`);
 
         logger.info(`Processing ingestion ${ingestion.id}: ${filename}`);
-        Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Ingestion started", source, filename, fileSize });
+        Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Ingestion started", source, filename, fileSize }, supabase);
 
         // 2. Document Triage
         let isFastPath = false;
@@ -130,14 +130,14 @@ export class IngestionService {
                     isFastPath = true;
                     extractionContent = pdfData.text;
                     logger.info(`Smart Triage: PDF ${filename} passed text quality check (${pdfData.pages.filter(p => p.text.trim().length > 30).length}/${pdfData.total} pages with text). Routing to Fast Path.`);
-                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Smart Triage passed", type: "pdf", fast_path: true });
+                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Smart Triage passed", type: "pdf", fast_path: true }, supabase);
                 } else {
                     logger.info(`Smart Triage: PDF ${filename} failed text quality check. Routing to Heavy Path.`);
-                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Smart Triage failed", type: "pdf", fast_path: false });
+                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Smart Triage failed", type: "pdf", fast_path: false }, supabase);
                 }
             } catch (err) {
                 logger.warn(`Failed to parse PDF ${filename}. Routing to Heavy Path.`, { err });
-                Actuator.logEvent(ingestion.id, userId, "error", "Triage", { action: "PDF parse failed", error: String(err) });
+                Actuator.logEvent(ingestion.id, userId, "error", "Triage", { action: "PDF parse failed", error: String(err) }, supabase);
             }
         }
 
@@ -153,7 +153,7 @@ export class IngestionService {
                     llm_provider: settingsRow.data?.llm_provider ?? undefined,
                     llm_model: settingsRow.data?.llm_model ?? undefined,
                 };
-                const doc = { filePath: filename, text: extractionContent, ingestionId: ingestion.id, userId };
+                const doc = { filePath: filename, text: extractionContent, ingestionId: ingestion.id, userId, supabase };
 
                 // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
                 const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
@@ -206,7 +206,7 @@ export class IngestionService {
 
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
-                Actuator.logEvent(ingestion.id, userId, "error", "Processing", { error: msg });
+                Actuator.logEvent(ingestion.id, userId, "error", "Processing", { error: msg }, supabase);
                 const { data: updatedIngestion } = await supabase
                     .from("ingestions")
                     .update({ status: "error", error_message: msg })
@@ -265,7 +265,7 @@ export class IngestionService {
             .update({ status: "processing", error_message: null, policy_id: null, policy_name: null, extracted: {}, actions_taken: [] })
             .eq("id", ingestionId);
 
-        Actuator.logEvent(ingestionId, userId, "info", "Triage", { action: "Re-run Initiated" });
+        Actuator.logEvent(ingestionId, userId, "info", "Triage", { action: "Re-run Initiated" }, supabase);
 
         const filename = ingestion.filename;
         const filePath = ingestion.storage_path;
@@ -303,7 +303,7 @@ export class IngestionService {
                 llm_provider: settingsRow.data?.llm_provider ?? undefined,
                 llm_model: settingsRow.data?.llm_model ?? undefined,
             };
-            const doc = { filePath, text: extractionContent, ingestionId, userId };
+            const doc = { filePath, text: extractionContent, ingestionId, userId, supabase };
 
             const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
                 doc,
