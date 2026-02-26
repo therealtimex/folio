@@ -153,7 +153,7 @@ export class IngestionService {
                     llm_provider: settingsRow.data?.llm_provider ?? undefined,
                     llm_model: settingsRow.data?.llm_model ?? undefined,
                 };
-                const doc = { filePath: filename, text: extractionContent, ingestionId: ingestion.id, userId, supabase };
+                const doc = { filePath: filePath, text: extractionContent, ingestionId: ingestion.id, userId, supabase };
 
                 // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
                 const { entities: baselineEntities } = await PolicyEngine.extractBaseline(

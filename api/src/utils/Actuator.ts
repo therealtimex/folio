@@ -192,21 +192,33 @@ export class Actuator {
                     Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "rename", original: file.name, new: newName }, supabase);
                     file = { ...file, path: newPath, name: newName };
 
-                } else if (action.type === "move" && destination) {
+                    // Update DB so re-runs don't break
+                    const db = supabase ?? getServiceRoleSupabase();
+                    if (db) {
+                        await db.from("ingestions").update({ storage_path: newPath, filename: newName }).eq("id", ingestionId);
+                    }
+                } else if (action.type === "copy" && destination) {
                     const destDir = interpolate(destination, vars);
                     fs.mkdirSync(destDir, { recursive: true });
-                    const newPath = path.join(destDir, path.basename(currentPath));
+
+                    let newName = file.name;
+                    if (pattern) {
+                        newName = interpolate(pattern, vars);
+                        const ext = path.extname(file.name);
+                        if (!newName.endsWith(ext)) newName += ext;
+                    }
+
+                    const newPath = path.join(destDir, newName);
                     await new Promise<void>((resolve, reject) => {
-                        fs.rename(currentPath, newPath, (err) => {
+                        fs.copyFile(currentPath, newPath, (err) => {
                             if (err) reject(err);
                             else resolve();
                         });
                     });
-                    currentPath = newPath;
-                    result.actionsExecuted.push(`Moved to '${destDir}'`);
-                    result.trace.push({ timestamp: new Date().toISOString(), step: `Moved file to ${destDir}` });
-                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "move", destination: destDir }, supabase);
-                    file = { ...file, path: newPath };
+
+                    result.actionsExecuted.push(`Copied to '${newPath}'`);
+                    result.trace.push({ timestamp: new Date().toISOString(), step: `Copied file to ${newPath}`, details: { original: currentPath, copy: newPath } });
+                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "copy", destination: destDir, newName }, supabase);
 
                 } else if (action.type === "log_csv" && csvPathTemplate) {
                     const csvPath = interpolate(csvPathTemplate, vars);
