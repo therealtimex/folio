@@ -1,4 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import fs from "fs/promises";
+import { PDFParse } from "pdf-parse";
 import { createLogger } from "../utils/logger.js";
 import { PolicyLoader } from "./PolicyLoader.js";
 import { PolicyEngine } from "./PolicyEngine.js";
@@ -26,44 +28,9 @@ export interface Ingestion {
     updated_at: string;
 }
 
-// Helper to map rtx_activities row to standard Ingestion interface for the UI
-function mapRowToIngestion(row: any): Ingestion {
-    let mappedStatus: IngestionStatus = "pending";
-    if (row.status === "completed") {
-        mappedStatus = row.result?.status === "matched" ? "matched"
-            : row.result?.status === "fallback" ? "no_match"
-                : "error";
-    } else if (row.status === "failed") {
-        mappedStatus = "error";
-    } else if (row.status === "claimed" || row.status === "processing") {
-        mappedStatus = "processing";
-    }
-
-    return {
-        id: row.id,
-        user_id: row.user_id,
-        source: row.raw_data?.source ?? "upload",
-        filename: row.raw_data?.filename ?? "Unknown",
-        mime_type: row.raw_data?.mime_type,
-        file_size: row.raw_data?.file_size,
-        status: mappedStatus,
-        policy_id: row.result?.matchedPolicy ?? null,
-        policy_name: row.result?.policy_name ?? null,
-        extracted: row.result?.extractedData ?? {},
-        actions_taken: row.result?.actionsExecuted ?? [],
-        error_message: row.error_message || row.result?.error || null,
-        storage_path: row.raw_data?.storage_path,
-        created_at: row.created_at,
-        updated_at: row.completed_at || row.created_at,
-    };
-}
-
-// ─── Service ─────────────────────────────────────────────────────────────────
-
 export class IngestionService {
-
     /**
-     * Ingest a document using RealTimeX compatible mode (rtx_activities).
+     * Ingest a document using Hybrid Routing Architecture.
      */
     static async ingest(opts: {
         supabase: SupabaseClient;
@@ -77,25 +44,170 @@ export class IngestionService {
     }): Promise<Ingestion> {
         const { supabase, userId, filename, mimeType, fileSize, source = "upload", filePath, content } = opts;
 
-        // 1. Insert into rtx_activities
-        const { data: row, error: insertErr } = await supabase
-            .from("rtx_activities")
+        // 1. Insert into ingestions
+        const { data: ingestion, error: insertErr } = await supabase
+            .from("ingestions")
             .insert({
                 user_id: userId,
-                status: "processing", // Folio processes immediately for now
-                raw_data: { source, filename, mime_type: mimeType, file_size: fileSize, file_path: filePath, content }
+                source,
+                filename,
+                mime_type: mimeType,
+                file_size: fileSize,
+                storage_path: filePath,
+                status: "processing"
             })
             .select()
             .single();
 
-        if (insertErr || !row) throw new Error(`Failed to create ingestion record: ${insertErr?.message}`);
+        if (insertErr || !ingestion) throw new Error(`Failed to create ingestion record: ${insertErr?.message}`);
 
-        logger.info(`Processing ingestion (rtx_activities) ${row.id}: ${filename}`);
+        logger.info(`Processing ingestion ${ingestion.id}: ${filename}`);
 
-        try {
-            // 2. Run through FPE
+        // 2. Document Triage
+        let isFastPath = false;
+        let extractionContent = content;
+        const ext = filename.toLowerCase().split('.').pop() || '';
+        const fastExts = ['txt', 'md', 'csv', 'json'];
+
+        if (fastExts.includes(ext)) {
+            isFastPath = true;
+        } else if (ext === 'pdf') {
+            try {
+                const buffer = await fs.readFile(filePath);
+                const parser = new PDFParse({ data: buffer });
+                const pdfData = await parser.getText();
+                if (pdfData.text && pdfData.text.trim().length > 50) {
+                    isFastPath = true;
+                    extractionContent = pdfData.text;
+                    logger.info(`Smart Triage: PDF ${filename} has extractable text. Routing to Fast Path.`);
+                } else {
+                    logger.info(`Smart Triage: PDF ${filename} has minimal/no text. Routing to Heavy Path.`);
+                }
+            } catch (err) {
+                logger.warn(`Failed to parse PDF ${filename}. Routing to Heavy Path.`, { err });
+            }
+        }
+
+        if (isFastPath) {
+            try {
+                // 3. Fast Path (Local Policy Engine)
+                const userPolicies = await PolicyLoader.load(false, supabase);
+                const doc = { filePath: filename, text: extractionContent };
+
+                let result;
+                if (userPolicies.length > 0) {
+                    result = await PolicyEngine.processWithPolicies(doc, userPolicies);
+                } else {
+                    result = await PolicyEngine.process(doc);
+                }
+
+                const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
+                const finalStatus = result.status === "fallback" ? "no_match" : result.status;
+
+                const { data: updatedIngestion } = await supabase
+                    .from("ingestions")
+                    .update({
+                        status: finalStatus,
+                        policy_id: result.matchedPolicy,
+                        policy_name: policyName,
+                        extracted: result.extractedData,
+                        actions_taken: result.actionsExecuted
+                    })
+                    .eq("id", ingestion.id)
+                    .select()
+                    .single();
+
+                return updatedIngestion as Ingestion;
+
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                const { data: updatedIngestion } = await supabase
+                    .from("ingestions")
+                    .update({ status: "error", error_message: msg })
+                    .eq("id", ingestion.id)
+                    .select()
+                    .single();
+                return updatedIngestion as Ingestion;
+            }
+        } else {
+            // 4. Heavy Path (Delegate to RealTimeX)
+            const { error: rtxErr } = await supabase
+                .from("rtx_activities")
+                .insert({
+                    user_id: userId,
+                    status: "pending", // Waiting for RealTimeX
+                    raw_data: {
+                        source,
+                        filename,
+                        mime_type: mimeType,
+                        file_size: fileSize,
+                        file_path: filePath,
+                        ingestion_id: ingestion.id
+                    }
+                });
+
+            if (rtxErr) {
+                logger.error(`Failed to delegate to rtx_activities`, { rtxErr });
+            }
+
+            const { data: pendingIngestion } = await supabase
+                .from("ingestions")
+                .update({ status: "pending" }) // UI shows pending
+                .eq("id", ingestion.id)
+                .select()
+                .single();
+
+            return pendingIngestion as Ingestion;
+        }
+    }
+
+    /**
+     * Re-run an existing ingestion
+     */
+    static async rerun(ingestionId: string, supabase: SupabaseClient, userId: string): Promise<boolean> {
+        const { data: ingestion, error } = await supabase
+            .from("ingestions")
+            .select("*")
+            .eq("id", ingestionId)
+            .eq("user_id", userId)
+            .single();
+
+        if (error || !ingestion) throw new Error("Ingestion not found");
+
+        await supabase
+            .from("ingestions")
+            .update({ status: "processing", error_message: null, policy_id: null, policy_name: null, extracted: {}, actions_taken: [] })
+            .eq("id", ingestionId);
+
+        const filename = ingestion.filename;
+        const filePath = ingestion.storage_path;
+        if (!filePath) throw new Error("No storage path found for this ingestion");
+
+        let isFastPath = false;
+        let extractionContent = "";
+        const ext = filename.toLowerCase().split('.').pop() || '';
+        const fastExts = ['txt', 'md', 'csv', 'json'];
+
+        if (fastExts.includes(ext)) {
+            isFastPath = true;
+            extractionContent = await fs.readFile(filePath, "utf-8");
+        } else if (ext === 'pdf') {
+            try {
+                const buffer = await fs.readFile(filePath);
+                const parser = new PDFParse({ data: buffer });
+                const pdfData = await parser.getText();
+                if (pdfData.text && pdfData.text.trim().length > 50) {
+                    isFastPath = true;
+                    extractionContent = pdfData.text;
+                }
+            } catch (err) {
+                // ignore
+            }
+        }
+
+        if (isFastPath) {
             const userPolicies = await PolicyLoader.load(false, supabase);
-            const doc = { filePath: filename, text: content };
+            const doc = { filePath, text: extractionContent };
 
             let result;
             if (userPolicies.length > 0) {
@@ -105,75 +217,44 @@ export class IngestionService {
             }
 
             const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
-            const fullResult = { ...result, policy_name: policyName };
+            const finalStatus = result.status === "fallback" ? "no_match" : result.status;
 
-            // 3. Mark completed
-            const { error: completeErr } = await supabase.rpc("rtx_fn_complete_task", {
-                target_task_id: row.id,
-                result_data: fullResult
-            });
-            if (completeErr) throw new Error(`Failed to log completion: ${completeErr.message}`);
+            await supabase
+                .from("ingestions")
+                .update({
+                    status: finalStatus,
+                    policy_id: result.matchedPolicy,
+                    policy_name: policyName,
+                    extracted: result.extractedData,
+                    actions_taken: result.actionsExecuted
+                })
+                .eq("id", ingestionId);
 
-            // Fetch final row state
-            const finalRow = (await supabase.from("rtx_activities").select("*").eq("id", row.id).single()).data;
-            return mapRowToIngestion(finalRow ?? { ...row, status: "completed", result: fullResult });
-
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            // 4. Mark failed
-            await supabase.rpc("rtx_fn_fail_task", {
-                target_task_id: row.id,
-                machine_id: "folio-local",
-                error_msg: msg
-            });
-            logger.error(`Ingestion ${row.id} failed`, { err });
-
-            const finalRow = (await supabase.from("rtx_activities").select("*").eq("id", row.id).single()).data;
-            return mapRowToIngestion(finalRow ?? { ...row, status: "failed", error_message: msg });
-        }
-    }
-
-    /**
-     * Re-run an existing ingestion
-     */
-    static async rerun(ingestionId: string, supabase: SupabaseClient, userId: string): Promise<boolean> {
-        const { data: row, error } = await supabase
-            .from("rtx_activities")
-            .select("*")
-            .eq("id", ingestionId)
-            .eq("user_id", userId)
-            .single();
-
-        if (error || !row) throw new Error("Ingestion not found");
-
-        await supabase
-            .from("rtx_activities")
-            .update({ status: "processing", error_message: null, result: null, locked_by: "folio-local" })
-            .eq("id", ingestionId);
-
-        const filename = row.raw_data?.filename ?? "Unknown";
-        const filePath = row.raw_data?.file_path ?? filename;
-        const content = row.raw_data?.content ?? `Document: ${filename}`;
-
-        const userPolicies = await PolicyLoader.load(false, supabase);
-        const doc = { filePath, text: content };
-
-        let result;
-        if (userPolicies.length > 0) {
-            result = await PolicyEngine.processWithPolicies(doc, userPolicies);
+            return finalStatus === "matched";
         } else {
-            result = await PolicyEngine.process(doc);
+            // Re-delegate to rtx_activities
+            await supabase
+                .from("rtx_activities")
+                .insert({
+                    user_id: userId,
+                    status: "pending",
+                    raw_data: {
+                        source: ingestion.source,
+                        filename,
+                        mime_type: ingestion.mime_type,
+                        file_size: ingestion.file_size,
+                        file_path: filePath,
+                        ingestion_id: ingestion.id
+                    }
+                });
+
+            await supabase
+                .from("ingestions")
+                .update({ status: "pending" })
+                .eq("id", ingestionId);
+
+            return true;
         }
-
-        const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
-        const fullResult = { ...result, policy_name: policyName };
-
-        const { error: completeErr } = await supabase.rpc("rtx_fn_complete_task", {
-            target_task_id: ingestionId,
-            result_data: fullResult
-        });
-
-        return result.status === "matched" && !completeErr;
     }
 
     /**
@@ -181,14 +262,14 @@ export class IngestionService {
      */
     static async list(supabase: SupabaseClient, userId: string, limit = 50): Promise<Ingestion[]> {
         const { data, error } = await supabase
-            .from("rtx_activities")
+            .from("ingestions")
             .select("*")
             .eq("user_id", userId)
             .order("created_at", { ascending: false })
             .limit(limit);
 
         if (error) throw new Error(`Failed to list ingestions: ${error.message}`);
-        return (data ?? []).map(mapRowToIngestion);
+        return data as Ingestion[];
     }
 
     /**
@@ -196,12 +277,12 @@ export class IngestionService {
      */
     static async get(id: string, supabase: SupabaseClient, userId: string): Promise<Ingestion | null> {
         const { data } = await supabase
-            .from("rtx_activities")
+            .from("ingestions")
             .select("*")
             .eq("id", id)
             .eq("user_id", userId)
             .single();
-        return data ? mapRowToIngestion(data) : null;
+        return data as Ingestion | null;
     }
 
     /**
@@ -209,7 +290,7 @@ export class IngestionService {
      */
     static async delete(id: string, supabase: SupabaseClient, userId: string): Promise<boolean> {
         const { count, error } = await supabase
-            .from("rtx_activities")
+            .from("ingestions")
             .delete({ count: "exact" })
             .eq("id", id)
             .eq("user_id", userId);

@@ -1,6 +1,5 @@
--- Drop old ingestions table from previous migration step
-DROP TABLE IF EXISTS public.ingestions CASCADE;
-
+-- Keep old ingestions table from previous migration step for Hybrid Routing
+-- (Previously this dropped public.ingestions, but we now retain it as Folio's primary UI table).
 -- Create rtx_activities table as defined in Compatible Mode docs
 -- Added user_id for multi-tenant isolation
 CREATE TABLE public.rtx_activities (
