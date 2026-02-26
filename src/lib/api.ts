@@ -1,5 +1,5 @@
 import { getApiConfig } from "./api-config";
-import type { ApiResponse, ProcessingJob, UserSettings, EmailAccount, Rule, Stats, Profile } from "./types";
+import type { ApiResponse, ProcessingJob, UserSettings, EmailAccount, Rule, Stats, Profile, BaselineConfig, BaselineField } from "./types";
 
 interface ApiOptions extends RequestInit {
   auth?: boolean;
@@ -375,6 +375,49 @@ class HybridApiClient {
       method: "DELETE",
       auth: Boolean(token), token
     });
+  }
+
+  // ─── Baseline Config API ────────────────────────────────────────────────────
+
+  getBaselineConfig(token?: string | null) {
+    return this.expressRequest<{ success: boolean; config: BaselineConfig | null; defaults: BaselineField[] }>(
+      "/api/baseline-config",
+      { auth: Boolean(token), token }
+    );
+  }
+
+  getBaselineConfigHistory(token?: string | null) {
+    return this.expressRequest<{ success: boolean; history: BaselineConfig[] }>(
+      "/api/baseline-config/history",
+      { auth: Boolean(token), token }
+    );
+  }
+
+  saveBaselineConfig(
+    payload: { context?: string | null; fields: BaselineField[]; activate?: boolean },
+    token?: string | null
+  ) {
+    return this.expressRequest<{ success: boolean; config: BaselineConfig }>(
+      "/api/baseline-config",
+      { method: "POST", auth: Boolean(token), token, body: JSON.stringify(payload) }
+    );
+  }
+
+  activateBaselineConfig(id: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean }>(
+      `/api/baseline-config/${id}/activate`,
+      { method: "POST", auth: Boolean(token), token }
+    );
+  }
+
+  suggestBaselineConfig(
+    payload: { description: string; provider?: string; model?: string },
+    token?: string | null
+  ) {
+    return this.expressRequest<{ success: boolean; suggestion: { context: string; fields: import("./types").BaselineField[] } }>(
+      "/api/baseline-config/suggest",
+      { method: "POST", auth: Boolean(token), token, body: JSON.stringify(payload) }
+    );
   }
 }
 

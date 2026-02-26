@@ -57,6 +57,7 @@ export interface ActuatorResult {
     success: boolean;
     actionsExecuted: string[];
     errors: string[];
+    trace: { timestamp: string; step: string; details?: any }[];
 }
 
 export class Actuator {
@@ -70,7 +71,14 @@ export class Actuator {
             success: true,
             actionsExecuted: [],
             errors: [],
+            trace: [],
         };
+
+        const addTrace = (step: string, details?: any) => {
+            result.trace.push({ timestamp: new Date().toISOString(), step, details });
+        };
+
+        addTrace("Initializing Actuator", { actionsCount: actions.length });
 
         const vars = deriveVariables(data, fields);
         let currentPath = filePath;
@@ -86,6 +94,7 @@ export class Actuator {
                     fs.renameSync(currentPath, newPath);
                     currentPath = newPath;
                     result.actionsExecuted.push(`Renamed → ${newName}`);
+                    addTrace("Executed rename action", { from: filePath, to: newPath });
 
                 } else if (action.type === "move" && action.destination) {
                     const destDir = interpolate(action.destination, vars);
@@ -94,6 +103,7 @@ export class Actuator {
                     fs.renameSync(currentPath, newPath);
                     currentPath = newPath;
                     result.actionsExecuted.push(`Moved → ${destDir}`);
+                    addTrace("Executed move action", { from: filePath, to: newPath });
 
                 } else if (action.type === "log_csv" && action.path) {
                     const csvPath = interpolate(action.path, vars);
@@ -107,17 +117,20 @@ export class Actuator {
                         fs.appendFileSync(csvPath, row, "utf-8");
                     }
                     result.actionsExecuted.push(`Logged CSV → ${csvPath}`);
+                    addTrace("Executed log_csv action", { csvPath, cols });
 
                 } else if (action.type === "notify" && action.message) {
                     const msg = interpolate(action.message, vars);
                     logger.info(`[NOTIFY] ${msg}`);
                     result.actionsExecuted.push(`Notified: ${msg}`);
+                    addTrace("Executed notify action", { message: msg });
                 }
             } catch (err) {
                 const errMsg = err instanceof Error ? err.message : String(err);
                 logger.error(`Action '${action.type}' failed: ${errMsg}`);
                 result.errors.push(`${action.type}: ${errMsg}`);
                 result.success = false;
+                addTrace("Action failed", { type: action.type, error: errMsg });
             }
         }
 

@@ -7,6 +7,7 @@ import { usePageAgent } from '../hooks/usePageAgent';
 import { MailSourcesTab } from './config/MailTab';
 import { IntelligenceTab } from './config/IntelligenceTab';
 import { StorageTab } from './config/StorageTab';
+import { BaselineTab } from './config/BaselineTab';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
 
 const DEFAULT_PROVIDER = 'realtimexai';
@@ -156,10 +157,11 @@ export function Configuration() {
             </div>
 
             <Tabs defaultValue="mail" className="w-full">
-                <TabsList className="grid w-full grid-cols-3 max-w-md h-12">
+                <TabsList className="grid w-full grid-cols-4 max-w-lg h-12">
                     <TabsTrigger value="mail" className="h-10">Mail</TabsTrigger>
                     <TabsTrigger value="storage" className="h-10">Storage</TabsTrigger>
                     <TabsTrigger value="intelligence" className="h-10">Intelligence</TabsTrigger>
+                    <TabsTrigger value="baseline" className="h-10">Baseline</TabsTrigger>
                 </TabsList>
 
                 <div className="mt-8">
@@ -192,6 +194,10 @@ export function Configuration() {
                             handleEmbedProviderChange={handleEmbedProviderChange}
                             DEFAULT_PROVIDER={DEFAULT_PROVIDER}
                         />
+                    </TabsContent>
+
+                    <TabsContent value="baseline" className="m-0 border-none p-0 outline-none">
+                        <BaselineTab />
                     </TabsContent>
                 </div>
             </Tabs>

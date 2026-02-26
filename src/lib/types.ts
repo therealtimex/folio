@@ -1,3 +1,21 @@
+export interface BaselineField {
+  key: string;
+  type: "string" | "number" | "date" | "currency" | "string[]";
+  description: string;
+  enabled: boolean;
+  is_default: boolean;
+}
+
+export interface BaselineConfig {
+  id: string;
+  user_id: string;
+  version: number;
+  context: string | null;
+  fields: BaselineField[];
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface SupabaseConfig {
   url: string;
   anonKey: string;

@@ -34,6 +34,7 @@ export interface Ingestion {
     extracted?: Record<string, unknown>;
     actions_taken?: string[];
     error_message?: string;
+    trace?: Array<{ timestamp: string; step: string; details?: any }>;
     created_at: string;
 }
 

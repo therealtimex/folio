@@ -4,8 +4,55 @@ import { PDFParse } from "pdf-parse";
 import { createLogger } from "../utils/logger.js";
 import { PolicyLoader } from "./PolicyLoader.js";
 import { PolicyEngine } from "./PolicyEngine.js";
+import { BaselineConfigService } from "./BaselineConfigService.js";
 
 const logger = createLogger("IngestionService");
+
+/**
+ * Multi-signal classifier that decides whether pdf-parse extracted enough
+ * real text to skip GPU OCR and go straight to the local LLM (Fast Path).
+ *
+ * Four independent signals must all pass:
+ *
+ *  1. Minimum content  – collapse whitespace before counting so sparse/formatted
+ *                        PDFs (forms, invoices) don't fail on raw length alone.
+ *  2. Word count       – Unicode-aware (\p{L}) so French, German, Japanese, etc.
+ *                        aren't penalised; pure symbol/number docs are caught.
+ *  3. Garbage ratio    – control chars + U+FFFD are the signature of image bytes
+ *                        that were mis-decoded as text.  >2 % → encoding failure.
+ *  4. Page coverage    – only for multi-page docs: if fewer than 40 % of pages
+ *                        yield non-trivial text the document is mostly scanned.
+ */
+function isPdfTextExtractable(pdfData: {
+    text: string;
+    pages: Array<{ num: number; text: string }>;
+    total: number;
+}): boolean {
+    const raw = pdfData.text ?? '';
+
+    // Signal 1: at least 100 printable characters after whitespace normalisation
+    if (raw.replace(/\s+/g, ' ').trim().length < 100) return false;
+
+    // Signal 2: at least 20 word-like tokens (≥2 Unicode letters)
+    const words = raw.match(/\p{L}{2,}/gu) ?? [];
+    if (words.length < 20) return false;
+
+    // Signal 3: garbage character ratio must be below 2 %
+    const garbageCount = (raw.match(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\uFFFD]/g) ?? []).length;
+    if (raw.length > 0 && garbageCount / raw.length > 0.02) return false;
+
+    // Signal 4: page coverage — getText() always emits one entry per page,
+    // so pages.length === total.  For docs with >2 pages, at least 40 % of
+    // pages must contain >30 non-whitespace characters.
+    if (pdfData.total > 2 && pdfData.pages.length > 0) {
+        const pagesWithText = pdfData.pages.filter(
+            (p) => (p.text ?? '').replace(/\s/g, '').length > 30
+        ).length;
+        if (pagesWithText / pdfData.total < 0.4) return false;
+    }
+
+    return true;
+}
 
 export type IngestionStatus = "pending" | "processing" | "matched" | "no_match" | "error";
 export type IngestionSource = "upload" | "dropzone" | "email" | "url";
@@ -24,6 +71,7 @@ export interface Ingestion {
     actions_taken?: string[];
     error_message?: string;
     storage_path?: string;
+    trace?: Array<{ timestamp: string; step: string; details?: any }>;
     created_at: string;
     updated_at: string;
 }
@@ -76,12 +124,12 @@ export class IngestionService {
                 const buffer = await fs.readFile(filePath);
                 const parser = new PDFParse({ data: buffer });
                 const pdfData = await parser.getText();
-                if (pdfData.text && pdfData.text.trim().length > 50) {
+                if (isPdfTextExtractable(pdfData)) {
                     isFastPath = true;
                     extractionContent = pdfData.text;
-                    logger.info(`Smart Triage: PDF ${filename} has extractable text. Routing to Fast Path.`);
+                    logger.info(`Smart Triage: PDF ${filename} passed text quality check (${pdfData.pages.filter(p => p.text.trim().length > 30).length}/${pdfData.total} pages with text). Routing to Fast Path.`);
                 } else {
-                    logger.info(`Smart Triage: PDF ${filename} has minimal/no text. Routing to Heavy Path.`);
+                    logger.info(`Smart Triage: PDF ${filename} failed text quality check. Routing to Heavy Path.`);
                 }
             } catch (err) {
                 logger.warn(`Failed to parse PDF ${filename}. Routing to Heavy Path.`, { err });
@@ -90,19 +138,39 @@ export class IngestionService {
 
         if (isFastPath) {
             try {
-                // 3. Fast Path (Local Policy Engine)
-                const userPolicies = await PolicyLoader.load(false, supabase);
+                // 3. Fast Path — fetch all dependencies in parallel
+                const [userPolicies, settingsRow, baselineConfig] = await Promise.all([
+                    PolicyLoader.load(false, supabase),
+                    supabase.from("user_settings").select("llm_provider, llm_model").eq("user_id", userId).maybeSingle(),
+                    BaselineConfigService.getActive(supabase, userId),
+                ]);
+                const llmSettings = {
+                    llm_provider: settingsRow.data?.llm_provider ?? undefined,
+                    llm_model: settingsRow.data?.llm_model ?? undefined,
+                };
                 const doc = { filePath: filename, text: extractionContent };
 
+                // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
+                const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
+                    doc,
+                    { context: baselineConfig?.context, fields: baselineConfig?.fields },
+                    llmSettings
+                );
+
+                // 5. Stage 2: Policy matching + policy-specific field extraction
                 let result;
                 if (userPolicies.length > 0) {
-                    result = await PolicyEngine.processWithPolicies(doc, userPolicies);
+                    result = await PolicyEngine.processWithPolicies(doc, userPolicies, llmSettings);
                 } else {
-                    result = await PolicyEngine.process(doc);
+                    result = await PolicyEngine.process(doc, llmSettings);
                 }
 
                 const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
                 const finalStatus = result.status === "fallback" ? "no_match" : result.status;
+
+                // Merge: baseline entities are the foundation; policy-specific fields
+                // are overlaid on top so more precise extractions take precedence.
+                const mergedExtracted = { ...baselineEntities, ...result.extractedData };
 
                 const { data: updatedIngestion } = await supabase
                     .from("ingestions")
@@ -110,8 +178,10 @@ export class IngestionService {
                         status: finalStatus,
                         policy_id: result.matchedPolicy,
                         policy_name: policyName,
-                        extracted: result.extractedData,
-                        actions_taken: result.actionsExecuted
+                        extracted: mergedExtracted,
+                        actions_taken: result.actionsExecuted,
+                        trace: result.trace,
+                        baseline_config_id: baselineConfig?.id ?? null,
                     })
                     .eq("id", ingestion.id)
                     .select()
@@ -196,7 +266,7 @@ export class IngestionService {
                 const buffer = await fs.readFile(filePath);
                 const parser = new PDFParse({ data: buffer });
                 const pdfData = await parser.getText();
-                if (pdfData.text && pdfData.text.trim().length > 50) {
+                if (isPdfTextExtractable(pdfData)) {
                     isFastPath = true;
                     extractionContent = pdfData.text;
                 }
@@ -206,18 +276,33 @@ export class IngestionService {
         }
 
         if (isFastPath) {
-            const userPolicies = await PolicyLoader.load(false, supabase);
+            const [userPolicies, settingsRow, baselineConfig] = await Promise.all([
+                PolicyLoader.load(false, supabase),
+                supabase.from("user_settings").select("llm_provider, llm_model").eq("user_id", userId).maybeSingle(),
+                BaselineConfigService.getActive(supabase, userId),
+            ]);
+            const llmSettings = {
+                llm_provider: settingsRow.data?.llm_provider ?? undefined,
+                llm_model: settingsRow.data?.llm_model ?? undefined,
+            };
             const doc = { filePath, text: extractionContent };
+
+            const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
+                doc,
+                { context: baselineConfig?.context, fields: baselineConfig?.fields },
+                llmSettings
+            );
 
             let result;
             if (userPolicies.length > 0) {
-                result = await PolicyEngine.processWithPolicies(doc, userPolicies);
+                result = await PolicyEngine.processWithPolicies(doc, userPolicies, llmSettings);
             } else {
-                result = await PolicyEngine.process(doc);
+                result = await PolicyEngine.process(doc, llmSettings);
             }
 
             const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
             const finalStatus = result.status === "fallback" ? "no_match" : result.status;
+            const mergedExtracted = { ...baselineEntities, ...result.extractedData };
 
             await supabase
                 .from("ingestions")
@@ -225,8 +310,10 @@ export class IngestionService {
                     status: finalStatus,
                     policy_id: result.matchedPolicy,
                     policy_name: policyName,
-                    extracted: result.extractedData,
-                    actions_taken: result.actionsExecuted
+                    extracted: mergedExtracted,
+                    actions_taken: result.actionsExecuted,
+                    trace: result.trace,
+                    baseline_config_id: baselineConfig?.id ?? null,
                 })
                 .eq("id", ingestionId);
 
