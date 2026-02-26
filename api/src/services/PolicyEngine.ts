@@ -47,10 +47,44 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
         });
     }
 
-    if (condition.type === "llm_verify") {
-        if (!sdk || !condition.prompt) return false;
+    if (condition.type === "filename") {
+        const values = Array.isArray(condition.value) ? condition.value : [condition.value ?? ""];
+        const name = condition.case_sensitive ? doc.filePath : doc.filePath.toLowerCase();
+        return values.some((v) => {
+            const needle = condition.case_sensitive ? v : v.toLowerCase();
+            return name.includes(needle);
+        });
+    }
 
-        trace.push({ timestamp: new Date().toISOString(), step: "Evaluating llm_verify condition", details: { prompt: condition.prompt } });
+    if (condition.type === "file_type" || condition.type === "mime_type") {
+        const ext = doc.filePath.split(".").pop()?.toLowerCase() ?? "";
+        // MIME subtype → extension exceptions where they differ
+        const MIME_TO_EXT: Record<string, string> = { plain: "txt", markdown: "md", "x-markdown": "md" };
+        const values = Array.isArray(condition.value) ? condition.value : [condition.value ?? ""];
+        return values.some((v) => {
+            const normalized = v.toLowerCase().replace(/^\./, "");
+            // Direct extension match: "pdf" or ".pdf"
+            if (normalized === ext) return true;
+            // MIME type match: "application/pdf" → subtype "pdf"
+            if (normalized.includes("/")) {
+                const subtype = normalized.split("/").pop() ?? "";
+                return (MIME_TO_EXT[subtype] ?? subtype) === ext;
+            }
+            return false;
+        });
+    }
+
+    if (condition.type === "llm_verify" || condition.type === "semantic") {
+        if (!sdk) return false;
+
+        // For semantic conditions, treat the value(s) as the verification prompt if no explicit prompt is set
+        const prompt = condition.prompt
+            ?? (Array.isArray(condition.value) ? condition.value.join("; ") : condition.value)
+            ?? "";
+
+        if (!prompt) return false;
+
+        trace.push({ timestamp: new Date().toISOString(), step: `Evaluating ${condition.type} condition`, details: { prompt } });
 
         try {
             const { provider, model } = await SDKService.resolveChatProvider(settings);
@@ -62,27 +96,31 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
                     },
                     {
                         role: "user",
-                        content: `Document text:\n\n${doc.text.slice(0, 2000)}\n\nQuestion: ${condition.prompt}`
+                        content: `Document text:\n\n${doc.text.slice(0, 2000)}\n\nQuestion: ${prompt}`
                     }
                 ],
                 { provider, model }
             );
 
-            const raw: string = (result as any).content ?? (result as any).choices?.[0]?.message?.content ?? "";
+            const raw: string =
+                (result as any).response?.content ??
+                (result as any).content ??
+                (result as any).choices?.[0]?.message?.content ?? "";
             const match = raw.match(/\{[\s\S]*\}/);
             if (match) {
                 const parsed = JSON.parse(match[0]);
                 const threshold = condition.confidence_threshold ?? 0.8;
                 const passed = parsed.result === true && (parsed.confidence ?? 1) >= threshold;
-                trace.push({ timestamp: new Date().toISOString(), step: "llm_verify result", details: { parsed, passed } });
+                trace.push({ timestamp: new Date().toISOString(), step: `${condition.type} result`, details: { parsed, passed } });
                 return passed;
             }
         } catch (err) {
-            logger.warn("llm_verify condition failed", { err });
+            logger.warn(`${condition.type} condition failed`, { err });
         }
         return false;
     }
 
+    logger.warn(`Unknown condition type "${(condition as any).type}" — skipping`);
     return false;
 }
 

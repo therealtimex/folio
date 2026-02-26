@@ -157,12 +157,22 @@ export class IngestionService {
                     llmSettings
                 );
 
+                // Enrich the document with extracted entities so policy keyword/semantic
+                // conditions can match against semantic field values (e.g. document_type:
+                // "invoice") even when those exact words don't appear in the raw text.
+                const entityLines = Object.entries(baselineEntities)
+                    .filter(([, v]) => v != null)
+                    .map(([k, v]) => `${k}: ${Array.isArray(v) ? (v as unknown[]).join(", ") : String(v)}`);
+                const enrichedDoc = entityLines.length > 0
+                    ? { ...doc, text: doc.text + "\n\n[Extracted fields]\n" + entityLines.join("\n") }
+                    : doc;
+
                 // 5. Stage 2: Policy matching + policy-specific field extraction
                 let result;
                 if (userPolicies.length > 0) {
-                    result = await PolicyEngine.processWithPolicies(doc, userPolicies, llmSettings);
+                    result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings);
                 } else {
-                    result = await PolicyEngine.process(doc, llmSettings);
+                    result = await PolicyEngine.process(enrichedDoc, llmSettings);
                 }
 
                 const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
@@ -293,11 +303,18 @@ export class IngestionService {
                 llmSettings
             );
 
+            const entityLines = Object.entries(baselineEntities)
+                .filter(([, v]) => v != null)
+                .map(([k, v]) => `${k}: ${Array.isArray(v) ? (v as unknown[]).join(", ") : String(v)}`);
+            const enrichedDoc = entityLines.length > 0
+                ? { ...doc, text: doc.text + "\n\n[Extracted fields]\n" + entityLines.join("\n") }
+                : doc;
+
             let result;
             if (userPolicies.length > 0) {
-                result = await PolicyEngine.processWithPolicies(doc, userPolicies, llmSettings);
+                result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings);
             } else {
-                result = await PolicyEngine.process(doc, llmSettings);
+                result = await PolicyEngine.process(enrichedDoc, llmSettings);
             }
 
             const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;

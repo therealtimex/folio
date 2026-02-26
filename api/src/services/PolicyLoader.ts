@@ -6,7 +6,7 @@ const logger = createLogger("PolicyLoader");
 // ─── Types ─────────────────────────────────────────────────────────────────
 
 export type MatchStrategy = "ALL" | "ANY";
-export type ConditionType = "keyword" | "llm_verify" | "semantic";
+export type ConditionType = "keyword" | "llm_verify" | "semantic" | "filename" | "file_type" | "mime_type";
 
 export interface MatchCondition {
     type: ConditionType;
@@ -59,9 +59,9 @@ export interface FolioPolicy {
 }
 
 // ─── Cache ───────────────────────────────────────────────────────────────────
+// Keyed by user_id so one user's policies never bleed into another's.
 
-let _cache: FolioPolicy[] | null = null;
-let _lastLoad = 0;
+const _cache = new Map<string, { policies: FolioPolicy[]; loadedAt: number }>();
 const CACHE_TTL_MS = 30_000;
 
 // ─── Row → Policy ────────────────────────────────────────────────────────────
@@ -94,9 +94,14 @@ export class PolicyLoader {
             return [];
         }
 
+        // Resolve the user ID to scope the cache correctly
+        const { data: { user } } = await supabase.auth.getUser();
+        const userId = user?.id ?? "anonymous";
+
         const now = Date.now();
-        if (!forceRefresh && _cache && now - _lastLoad < CACHE_TTL_MS) {
-            return _cache;
+        const cached = _cache.get(userId);
+        if (!forceRefresh && cached && now - cached.loadedAt < CACHE_TTL_MS) {
+            return cached.policies;
         }
 
         try {
@@ -109,9 +114,8 @@ export class PolicyLoader {
             if (error) throw error;
 
             const policies = (data ?? []).map(rowToPolicy);
-            _cache = policies;
-            _lastLoad = Date.now();
-            logger.info(`Loaded ${policies.length} policies from DB`);
+            _cache.set(userId, { policies, loadedAt: Date.now() });
+            logger.info(`Loaded ${policies.length} policies from DB for user ${userId}`);
             return policies;
         } catch (err) {
             logger.error("Failed to load policies from DB", { err });
@@ -119,9 +123,12 @@ export class PolicyLoader {
         }
     }
 
-    static invalidateCache() {
-        _cache = null;
-        _lastLoad = 0;
+    static invalidateCache(userId?: string) {
+        if (userId) {
+            _cache.delete(userId);
+        } else {
+            _cache.clear();
+        }
     }
 
     static validate(policy: unknown): policy is FolioPolicy {
