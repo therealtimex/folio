@@ -117,7 +117,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
         description: "",
         keywords: "",
         matchStrategy: "ANY" as "ANY" | "ALL",
-        actions: [{ type: "copy" as "copy" | "rename" | "log_csv", destination: "" }],
+        actions: [{ type: "copy" as "copy" | "rename" | "log_csv" | "copy_to_gdrive", destination: "" }],
         tags: "",
         priority: 100,
     });
@@ -314,11 +314,15 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             const tags = quickForm.tags.split(",").map((t) => t.trim()).filter(Boolean);
 
             const builtActions: PolicyAction[] = quickForm.actions
-                .filter((a) => a.destination.trim())
+                .filter((a) => a.type === "copy_to_gdrive" || a.destination.trim())
                 .map((a) => {
                     const action: PolicyAction = { type: a.type };
                     if (a.type === "copy" || a.type === "rename") {
                         action.destination = a.destination;
+                    } else if (a.type === "copy_to_gdrive") {
+                        if (a.destination.trim()) {
+                            action.destination = a.destination.trim();
+                        }
                     } else if (a.type === "log_csv") {
                         action.path = a.destination;
                     }
@@ -602,9 +606,10 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                                         <option value="copy">Copy to folder</option>
                                                         <option value="rename">Rename file</option>
                                                         <option value="log_csv">Log to CSV</option>
+                                                        <option value="copy_to_gdrive">Copy to Google Drive</option>
                                                     </select>
                                                     <Input
-                                                        placeholder={action.type === "copy" ? "/Car/" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
+                                                        placeholder={action.type === "copy" ? "/Car/" : action.type === "copy_to_gdrive" ? "Folder ID (empty = My Drive root)" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
                                                         value={action.destination}
                                                         onChange={(e) => updateQuickAction(i, "destination", e.target.value)}
                                                         className="h-8 text-xs rounded-xl border-border/40 bg-background font-mono flex-1"

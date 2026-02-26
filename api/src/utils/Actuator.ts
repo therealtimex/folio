@@ -4,6 +4,7 @@ import path from "path";
 import { createLogger } from "./logger.js";
 import type { ExtractField } from "../services/PolicyLoader.js";
 import { getServiceRoleSupabase } from "../services/supabase.js";
+import { GoogleDriveService } from "../services/GoogleDriveService.js";
 
 const logger = createLogger("Actuator");
 
@@ -219,6 +220,19 @@ export class Actuator {
                     result.actionsExecuted.push(`Copied to '${newPath}'`);
                     result.trace.push({ timestamp: new Date().toISOString(), step: `Copied file to ${newPath}`, details: { original: currentPath, copy: newPath } });
                     Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "copy", destination: destDir, newName }, supabase);
+
+                } else if (action.type === "copy_to_gdrive") {
+                    const destDirId = destination ? interpolate(destination, vars) : undefined;
+
+                    const uploadResult = await GoogleDriveService.uploadFile(userId, currentPath, destDirId, supabase);
+
+                    if (!uploadResult.success) {
+                        throw new Error(uploadResult.error || "Failed to upload to Google Drive");
+                    }
+
+                    result.actionsExecuted.push(`Copied to Google Drive (ID: ${uploadResult.fileId})`);
+                    result.trace.push({ timestamp: new Date().toISOString(), step: `Copied file to Google Drive`, details: { original: currentPath, driveFileId: uploadResult.fileId, destinationFolderId: destDirId } });
+                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "copy_to_gdrive", destinationFolderId: destDirId ?? null, fileId: uploadResult.fileId }, supabase);
 
                 } else if (action.type === "log_csv" && csvPathTemplate) {
                     const csvPath = interpolate(csvPathTemplate, vars);

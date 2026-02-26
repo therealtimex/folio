@@ -115,7 +115,7 @@ class HybridApiClient {
   }
 
   getSettings(token?: string | null) {
-    return this.edgeRequest<{ settings: UserSettings | null }>("/api-v1-settings", {
+    return this.expressRequest<{ settings: UserSettings | null }>("/api/settings", {
       method: "GET",
       auth: Boolean(token),
       token
@@ -123,7 +123,7 @@ class HybridApiClient {
   }
 
   updateSettings(settings: Partial<UserSettings>, token?: string | null) {
-    return this.edgeRequest<{ success: boolean; settings: UserSettings }>("/api-v1-settings", {
+    return this.expressRequest<{ success: boolean; settings: UserSettings }>("/api/settings", {
       method: "PATCH",
       auth: Boolean(token),
       token,
@@ -251,6 +251,24 @@ class HybridApiClient {
 
   connectGmail(authCode: string, clientId: string, clientSecret: string, token?: string | null) {
     return this.expressRequest<{ success: boolean; account: EmailAccount }>("/api/accounts/gmail/connect", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify({ authCode, clientId, clientSecret })
+    });
+  }
+
+  getGoogleDriveAuthUrl(clientId: string, token?: string | null) {
+    return this.expressRequest<{ authUrl: string }>("/api/accounts/google-drive/auth-url", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify({ clientId })
+    });
+  }
+
+  connectGoogleDrive(authCode: string, clientId: string, clientSecret: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; account: any }>("/api/accounts/google-drive/connect", {
       method: "POST",
       auth: Boolean(token),
       token,

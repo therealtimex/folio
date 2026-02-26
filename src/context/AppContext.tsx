@@ -138,6 +138,7 @@ interface AppContextType {
         deleteRule: (ruleId: string) => Promise<boolean>;
         toggleRule: (ruleId: string) => Promise<boolean>;
     };
+    supabase: any; // Using any or SupabaseClient
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -310,8 +311,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const value = useMemo(() => ({
         state,
         dispatch,
-        actions
-    }), [state, actions]);
+        actions,
+        supabase
+    }), [state, actions, supabase]);
 
     return (
         <AppContext.Provider value={value}>

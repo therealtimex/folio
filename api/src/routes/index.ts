@@ -9,6 +9,9 @@ import sdkRoutes from "./sdk.js";
 import policiesRoutes from "./policies.js";
 import ingestionsRoutes from "./ingestions.js";
 import baselineConfigRoutes from "./baseline-config.js";
+import accountsRoutes from "./accounts.js";
+import settingsRoutes from "./settings.js";
+import rulesRoutes from "./rules.js";
 
 const router = Router();
 
@@ -21,5 +24,8 @@ router.use("/sdk", sdkRoutes);
 router.use("/policies", policiesRoutes);
 router.use("/ingestions", ingestionsRoutes);
 router.use("/baseline-config", baselineConfigRoutes);
+router.use("/accounts", accountsRoutes);
+router.use("/settings", settingsRoutes);
+router.use("/rules", rulesRoutes);
 
 export default router;

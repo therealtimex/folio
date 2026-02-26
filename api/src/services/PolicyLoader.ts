@@ -25,7 +25,7 @@ export interface ExtractField {
     transformers?: { name: string; as: string }[];
 }
 
-export type ActionType = "rename" | "copy" | "log_csv" | "notify" | "webhook";
+export type ActionType = "rename" | "copy" | "copy_to_gdrive" | "log_csv" | "notify" | "webhook";
 
 export interface PolicyAction {
     type: ActionType;

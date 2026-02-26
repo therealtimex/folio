@@ -20,7 +20,7 @@ import {
 } from '../ui/dialog';
 
 export function MailSourcesTab({ localSettings, setLocalSettings, handleSaveSettings, savingSettings }: any) {
-    const { state, actions } = useApp();
+    const { state, actions, supabase } = useApp();
     const { t } = useLanguage();
 
     const [showGmailModal, setShowGmailModal] = useState(false);
@@ -77,7 +77,8 @@ export function MailSourcesTab({ localSettings, setLocalSettings, handleSaveSett
             });
 
             if (success) {
-                const response = await api.getGmailAuthUrl(gmailClientId, gmailClientSecret);
+                const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined;
+                const response = await api.getGmailAuthUrl(gmailClientId, gmailClientSecret, token);
                 if (response.data?.authUrl) {
                     window.open(response.data.authUrl, '_blank');
                     setGmailModalStep('code');
@@ -103,7 +104,8 @@ export function MailSourcesTab({ localSettings, setLocalSettings, handleSaveSett
 
         setConnectingGmail(true);
         try {
-            const response = await api.connectGmail(gmailAuthCode.trim(), gmailClientId, gmailClientSecret);
+            const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined;
+            const response = await api.connectGmail(gmailAuthCode.trim(), gmailClientId, gmailClientSecret, token);
             if (response.data?.success) {
                 toast.success(t('config.toast.gmailConnected'));
                 setShowGmailModal(false);
@@ -139,7 +141,8 @@ export function MailSourcesTab({ localSettings, setLocalSettings, handleSaveSett
             });
 
             if (success) {
-                const response = await api.startMicrosoftDeviceFlow(outlookClientId, outlookTenantId || 'common');
+                const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined;
+                const response = await api.startMicrosoftDeviceFlow(outlookClientId, outlookTenantId || 'common', token);
                 if (response.data?.deviceCode) {
                     setOutlookDeviceCode(response.data.deviceCode);
                     setOutlookModalStep('device-code');
@@ -161,7 +164,8 @@ export function MailSourcesTab({ localSettings, setLocalSettings, handleSaveSett
     const pollOutlookLogin = async (deviceCode: string, clientId: string, tenantId: string) => {
         const pollInterval = setInterval(async () => {
             try {
-                const response = await api.pollMicrosoftDeviceCode(deviceCode, clientId, tenantId);
+                const token = supabase ? (await supabase.auth.getSession()).data.session?.access_token : undefined;
+                const response = await api.pollMicrosoftDeviceCode(deviceCode, clientId, tenantId, token);
                 if (response.data?.success) {
                     clearInterval(pollInterval);
                     setOutlookDeviceCode(null);
