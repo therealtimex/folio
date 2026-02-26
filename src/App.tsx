@@ -18,7 +18,8 @@ import { FunnelPage } from "./components/FunnelPage";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert";
-import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "./components/ui/sheet";
+import { TerminalProvider } from "./context/TerminalContext";
+import { LiveTerminal } from "./components/LiveTerminal";
 import { cn } from "@/lib/utils";
 import {
   Key,
@@ -271,220 +272,189 @@ export function App() {
 
   // 3. Final Main Application Shell
   return (
-    <div className="min-h-screen bg-background text-foreground selection:bg-primary/10 flex flex-col font-sans animate-in fade-in duration-1000">
-      {shouldShowMigrationBanner && migrationStatus && (
-        <MigrationBanner
-          status={migrationStatus}
-          onSnooze={handleSnoozeMigration}
-          onOpenModal={() => setShowMigrationModal(true)}
-        />
-      )}
+    <TerminalProvider>
+      <div className="min-h-screen bg-background text-foreground selection:bg-primary/10 flex flex-col font-sans animate-in fade-in duration-1000">
+        {shouldShowMigrationBanner && migrationStatus && (
+          <MigrationBanner
+            status={migrationStatus}
+            onSnooze={handleSnoozeMigration}
+            onOpenModal={() => setShowMigrationModal(true)}
+          />
+        )}
 
-      {migrationStatus && (
-        <MigrationModal
-          open={showMigrationModal}
-          onOpenChange={setShowMigrationModal}
-          status={migrationStatus}
-          onSnooze={handleSnoozeMigration}
-        />
-      )}
+        {migrationStatus && (
+          <MigrationModal
+            open={showMigrationModal}
+            onOpenChange={setShowMigrationModal}
+            status={migrationStatus}
+            onSnooze={handleSnoozeMigration}
+          />
+        )}
 
-      <header className={cn("border-b bg-background/80 backdrop-blur-xl sticky top-0 z-50 transition-all duration-500", shouldShowMigrationBanner && "mt-24 sm:mt-20")}>
-        <div className="container max-w-[1400px] mx-auto px-8 h-20 flex items-center">
-          {/* Brand Area */}
-          <div className="flex items-center gap-3 w-[280px]">
-            <div className="w-9 h-9 flex items-center justify-center">
-              <Logo className="w-8 h-8" />
-            </div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-xl font-bold tracking-tight text-foreground/90">Folio Foundation</h1>
-              <div className="flex items-center">
-                <span className="relative flex h-2 w-2">
-                  <span className={cn(
-                    "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
-                    health === "ok" ? "bg-emerald-400" : "bg-primary/40"
-                  )}></span>
-                  <span className={cn(
-                    "relative inline-flex rounded-full h-2 w-2",
-                    health === "ok" ? "bg-emerald-500" : "bg-primary/60"
-                  )}></span>
-                </span>
+        <header className={cn("border-b bg-background/80 backdrop-blur-xl sticky top-0 z-50 transition-all duration-500", shouldShowMigrationBanner && "mt-24 sm:mt-20")}>
+          <div className="container max-w-[1400px] mx-auto px-8 h-20 flex items-center">
+            {/* Brand Area */}
+            <div className="flex items-center gap-3 w-[280px]">
+              <div className="w-9 h-9 flex items-center justify-center">
+                <Logo className="w-8 h-8" />
+              </div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-bold tracking-tight text-foreground/90">Folio Foundation</h1>
+                <div className="flex items-center">
+                  <span className="relative flex h-2 w-2">
+                    <span className={cn(
+                      "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+                      health === "ok" ? "bg-emerald-400" : "bg-primary/40"
+                    )}></span>
+                    <span className={cn(
+                      "relative inline-flex rounded-full h-2 w-2",
+                      health === "ok" ? "bg-emerald-500" : "bg-primary/60"
+                    )}></span>
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Centered Navigation */}
-          <nav className="flex-1 hidden md:flex items-center justify-center gap-2">
-            {navItems.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setActivePage(item.id as Page)}
+            {/* Centered Navigation */}
+            <nav className="flex-1 hidden md:flex items-center justify-center gap-2">
+              {navItems.map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setActivePage(item.id as Page)}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-300",
+                    activePage === item.id
+                      ? "bg-primary/10 text-primary shadow-sm"
+                      : "text-muted-foreground/80 hover:bg-muted/60 hover:text-foreground"
+                  )}
+                >
+                  <item.icon className={cn("w-4.5 h-4.5", activePage === item.id ? "text-primary" : "text-muted-foreground/60")} />
+                  {item.label}
+                </button>
+              ))}
+            </nav>
+
+            {/* Right Utilities Area */}
+            <div className="flex items-center justify-end gap-5 w-[280px]">
+              {/* Mock Language Selector */}
+              <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-muted/40 rounded-full border border-border/40 cursor-pointer hover:bg-muted/60 transition-colors">
+                <img src="https://flagcdn.com/w40/us.png" className="w-4 h-3 rounded-sm opacity-80" alt="EN" />
+                <span className="text-[10px] font-extrabold tracking-widest text-muted-foreground">EN</span>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="icon"
                 className={cn(
-                  "flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all duration-300",
-                  activePage === item.id
-                    ? "bg-primary/10 text-primary shadow-sm"
-                    : "text-muted-foreground/80 hover:bg-muted/60 hover:text-foreground"
+                  "rounded-full h-9 w-9 transition-all relative group",
+                  migrationStatus?.needsMigration ? "text-red-500 hover:bg-red-500/10" : "text-muted-foreground hover:bg-muted/60"
                 )}
+                onClick={() => setHealthOpen(true)}
               >
-                <item.icon className={cn("w-4.5 h-4.5", activePage === item.id ? "text-primary" : "text-muted-foreground/60")} />
-                {item.label}
-              </button>
-            ))}
-          </nav>
+                <Activity className={cn("w-5 h-5", migrationStatus?.needsMigration && "animate-pulse")} />
+                {migrationStatus?.needsMigration && (
+                  <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500 ring-4 ring-red-500/20 animate-ping" />
+                )}
+              </Button>
 
-          {/* Right Utilities Area */}
-          <div className="flex items-center justify-end gap-5 w-[280px]">
-            {/* Mock Language Selector */}
-            <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 bg-muted/40 rounded-full border border-border/40 cursor-pointer hover:bg-muted/60 transition-colors">
-              <img src="https://flagcdn.com/w40/us.png" className="w-4 h-3 rounded-sm opacity-80" alt="EN" />
-              <span className="text-[10px] font-extrabold tracking-widest text-muted-foreground">EN</span>
-            </div>
+              <ModeToggle />
 
-            <Button
-              variant="ghost"
-              size="icon"
-              className={cn(
-                "rounded-full h-9 w-9 transition-all relative group",
-                migrationStatus?.needsMigration ? "text-red-500 hover:bg-red-500/10" : "text-muted-foreground hover:bg-muted/60"
-              )}
-              onClick={() => setHealthOpen(true)}
-            >
-              <Activity className={cn("w-5 h-5", migrationStatus?.needsMigration && "animate-pulse")} />
-              {migrationStatus?.needsMigration && (
-                <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500 ring-4 ring-red-500/20 animate-ping" />
-              )}
-            </Button>
-
-            <ModeToggle />
-
-            {/* Mock User Avatar */}
-            <div
-              className="w-10 h-10 rounded-full overflow-hidden border-2 border-background shadow-lg cursor-pointer ring-1 ring-border/20"
-              onClick={() => setActivePage("account")}
-            >
-              <div className="w-full h-full bg-primary flex items-center justify-center text-primary-foreground font-black text-xs">
-                {sessionEmail?.charAt(0).toUpperCase() || "A"}
+              {/* Mock User Avatar */}
+              <div
+                className="w-10 h-10 rounded-full overflow-hidden border-2 border-background shadow-lg cursor-pointer ring-1 ring-border/20"
+                onClick={() => setActivePage("account")}
+              >
+                <div className="w-full h-full bg-primary flex items-center justify-center text-primary-foreground font-black text-xs">
+                  {sessionEmail?.charAt(0).toUpperCase() || "A"}
+                </div>
               </div>
             </div>
           </div>
+        </header>
+
+        <main className="flex-1 w-full px-6 py-12 mx-auto max-w-[1600px]">
+          {/* Global Connection Error */}
+          {connectionError && (
+            <Alert variant="destructive" className="mb-10 animate-in fade-in slide-in-from-top-4 duration-500">
+              <AlertCircle className="h-5 w-5" />
+              <AlertTitle className="font-bold">Protocol Connection Failure</AlertTitle>
+              <AlertDescription className="text-[13px] opacity-90">
+                {connectionError}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {activePage === "dashboard" && (
+            <Dashboard configSnapshot={configSnapshot} configSource={configSource} />
+          )}
+          {activePage === "funnel" && (
+            <FunnelPage
+              onComposePolicyForDoc={(description) => {
+                setComposeDescription(description);
+                setActivePage("policies");
+              }}
+            />
+          )}
+          {activePage === "policies" && (
+            <PoliciesPage
+              initialCompose={composeDescription}
+              onInitialConsumed={() => setComposeDescription(null)}
+            />
+          )}
+          {activePage === "config" && (
+            <Configuration />
+          )}
+          {activePage === "account" && (
+            <AccountSettingsPage
+              supabase={supabase}
+              sessionEmail={sessionEmail}
+              sessionStatus={sessionStatus}
+              initStatus={initStatus}
+              configSnapshot={configSnapshot}
+              configSource={configSource}
+              onRefresh={handleAuthSuccess}
+              onLaunchSetup={() => setSetupOpen(true)}
+              onResetSetup={handleResetSetup}
+            />
+          )}
+        </main>
+
+        <LiveTerminal />
+
+        <div className="fixed bottom-6 left-6 z-[60]">
+          <Button variant="secondary" size="icon" className="h-12 w-12 rounded-full shadow-xl bg-background border border-border/40 text-muted-foreground hover:text-primary hover:scale-110 transition-all">
+            <LayoutDashboard className="w-6 h-6" />
+          </Button>
         </div>
-      </header>
 
-      <main className="flex-1 w-full px-6 py-12 mx-auto max-w-[1600px]">
-        {/* Global Connection Error */}
-        {connectionError && (
-          <Alert variant="destructive" className="mb-10 animate-in fade-in slide-in-from-top-4 duration-500">
-            <AlertCircle className="h-5 w-5" />
-            <AlertTitle className="font-bold">Protocol Connection Failure</AlertTitle>
-            <AlertDescription className="text-[13px] opacity-90">
-              {connectionError}
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {activePage === "dashboard" && (
-          <Dashboard configSnapshot={configSnapshot} configSource={configSource} />
-        )}
-        {activePage === "funnel" && (
-          <FunnelPage
-            onComposePolicyForDoc={(description) => {
-              setComposeDescription(description);
-              setActivePage("policies");
-            }}
-          />
-        )}
-        {activePage === "policies" && (
-          <PoliciesPage
-            initialCompose={composeDescription}
-            onInitialConsumed={() => setComposeDescription(null)}
-          />
-        )}
-        {activePage === "config" && (
-          <Configuration />
-        )}
-        {activePage === "account" && (
-          <AccountSettingsPage
-            supabase={supabase}
-            sessionEmail={sessionEmail}
-            sessionStatus={sessionStatus}
-            initStatus={initStatus}
-            configSnapshot={configSnapshot}
-            configSource={configSource}
-            onRefresh={handleAuthSuccess}
-            onLaunchSetup={() => setSetupOpen(true)}
-            onResetSetup={handleResetSetup}
-          />
-        )}
-      </main>
-
-      {/* Floating Action Elements (Parity Match) */}
-      <div className="fixed bottom-6 right-6 z-[60] flex flex-col items-end gap-3">
-        <Sheet>
-          <SheetTrigger asChild>
-            <Button
-              className="h-12 px-6 rounded-full shadow-2xl shadow-primary/20 bg-background/90 border border-primary/20 text-foreground font-bold hover:scale-105 transition-all flex items-center gap-3 backdrop-blur-md group"
-            >
-              <div className="relative">
-                <TerminalIcon className="w-5 h-5 text-primary" />
-                <span className="absolute -top-1 -right-1 block h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-background"></span>
-              </div>
-              <span className="text-sm tracking-tight text-primary">Live Trace</span>
-            </Button>
-          </SheetTrigger>
-          <SheetContent side="right" className="w-[450px] sm:w-[580px] p-0 flex flex-col border-l border-border/40 shadow-2xl">
-            <SheetHeader className="p-8 border-b bg-muted/20 backdrop-blur-md">
-              <SheetTitle className="flex items-center gap-3 font-mono text-xl">
-                <TerminalIcon className="w-6 h-6 text-primary" />
-                Intelligence Trace
-              </SheetTitle>
-              <p className="text-xs text-muted-foreground uppercase tracking-widest font-black opacity-60 mt-1">Foundational Log Protocol</p>
-            </SheetHeader>
-            <div className="flex-1 overflow-hidden p-8 bg-zinc-950/95 font-mono text-[13px] text-zinc-300">
-              <pre className="h-full overflow-y-auto whitespace-pre-wrap leading-relaxed custom-scrollbar selection:bg-primary/30">
-                {log || "// Monitoring foundation parity..."}
-              </pre>
+        <footer className="border-t bg-card/20 py-10 mt-auto">
+          <div className="container max-w-7xl mx-auto px-8 flex items-center justify-between text-[11px] text-muted-foreground font-bold uppercase tracking-[0.2em] opacity-40">
+            <div className="flex items-center gap-2">
+              <span>Core Foundation Protocol</span>
+              <div className="w-1 h-1 rounded-full bg-muted-foreground" />
+              <span>2026</span>
             </div>
-            <div className="p-6 border-t bg-background/80 flex items-center justify-between">
-              <Badge variant="outline" className="text-[10px] opacity-40">System Listening</Badge>
-              <Button variant="ghost" size="sm" className="text-[10px] uppercase font-black tracking-widest hover:text-primary" onClick={() => setLog("")}>Purge Buffer</Button>
+            <div className="flex items-center gap-8">
+              <a href="#" className="hover:text-foreground transition-colors">Whitepaper</a>
+              <a href="#" className="hover:text-foreground transition-colors">Foundation Registry</a>
             </div>
-          </SheetContent>
-        </Sheet>
-      </div>
-
-      <div className="fixed bottom-6 left-6 z-[60]">
-        <Button variant="secondary" size="icon" className="h-12 w-12 rounded-full shadow-xl bg-background border border-border/40 text-muted-foreground hover:text-primary hover:scale-110 transition-all">
-          <LayoutDashboard className="w-6 h-6" />
-        </Button>
-      </div>
-
-      <footer className="border-t bg-card/20 py-10 mt-auto">
-        <div className="container max-w-7xl mx-auto px-8 flex items-center justify-between text-[11px] text-muted-foreground font-bold uppercase tracking-[0.2em] opacity-40">
-          <div className="flex items-center gap-2">
-            <span>Core Foundation Protocol</span>
-            <div className="w-1 h-1 rounded-full bg-muted-foreground" />
-            <span>2026</span>
           </div>
-          <div className="flex items-center gap-8">
-            <a href="#" className="hover:text-foreground transition-colors">Whitepaper</a>
-            <a href="#" className="hover:text-foreground transition-colors">Foundation Registry</a>
-          </div>
-        </div>
-      </footer>
+        </footer>
 
-      <HealthModal
-        open={healthOpen}
-        onOpenChange={setHealthOpen}
-        health={health}
-        isBootstrapping={isBootstrapping}
-        initStatus={initStatus || "unknown"}
-        sessionStatus={sessionStatus || "unknown"}
-        migrationStatus={migrationStatus}
-        onRunMigration={() => {
-          setHealthOpen(false);
-          setShowMigrationModal(true);
-        }}
-      />
-    </div>
+        <HealthModal
+          open={healthOpen}
+          onOpenChange={setHealthOpen}
+          health={health}
+          isBootstrapping={isBootstrapping}
+          initStatus={initStatus || "unknown"}
+          sessionStatus={sessionStatus || "unknown"}
+          migrationStatus={migrationStatus}
+          onRunMigration={() => {
+            setHealthOpen(false);
+            setShowMigrationModal(true);
+          }}
+        />
+      </div>
+    </TerminalProvider>
   );
 }

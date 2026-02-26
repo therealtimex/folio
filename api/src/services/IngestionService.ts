@@ -5,6 +5,7 @@ import { createLogger } from "../utils/logger.js";
 import { PolicyLoader } from "./PolicyLoader.js";
 import { PolicyEngine } from "./PolicyEngine.js";
 import { BaselineConfigService } from "./BaselineConfigService.js";
+import { Actuator } from "../utils/Actuator.js";
 
 const logger = createLogger("IngestionService");
 
@@ -110,6 +111,7 @@ export class IngestionService {
         if (insertErr || !ingestion) throw new Error(`Failed to create ingestion record: ${insertErr?.message}`);
 
         logger.info(`Processing ingestion ${ingestion.id}: ${filename}`);
+        Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Ingestion started", source, filename, fileSize });
 
         // 2. Document Triage
         let isFastPath = false;
@@ -128,11 +130,14 @@ export class IngestionService {
                     isFastPath = true;
                     extractionContent = pdfData.text;
                     logger.info(`Smart Triage: PDF ${filename} passed text quality check (${pdfData.pages.filter(p => p.text.trim().length > 30).length}/${pdfData.total} pages with text). Routing to Fast Path.`);
+                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Smart Triage passed", type: "pdf", fast_path: true });
                 } else {
                     logger.info(`Smart Triage: PDF ${filename} failed text quality check. Routing to Heavy Path.`);
+                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Smart Triage failed", type: "pdf", fast_path: false });
                 }
             } catch (err) {
                 logger.warn(`Failed to parse PDF ${filename}. Routing to Heavy Path.`, { err });
+                Actuator.logEvent(ingestion.id, userId, "error", "Triage", { action: "PDF parse failed", error: String(err) });
             }
         }
 
@@ -148,7 +153,7 @@ export class IngestionService {
                     llm_provider: settingsRow.data?.llm_provider ?? undefined,
                     llm_model: settingsRow.data?.llm_model ?? undefined,
                 };
-                const doc = { filePath: filename, text: extractionContent };
+                const doc = { filePath: filename, text: extractionContent, ingestionId: ingestion.id, userId };
 
                 // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
                 const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
@@ -201,6 +206,7 @@ export class IngestionService {
 
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
+                Actuator.logEvent(ingestion.id, userId, "error", "Processing", { error: msg });
                 const { data: updatedIngestion } = await supabase
                     .from("ingestions")
                     .update({ status: "error", error_message: msg })
@@ -259,6 +265,8 @@ export class IngestionService {
             .update({ status: "processing", error_message: null, policy_id: null, policy_name: null, extracted: {}, actions_taken: [] })
             .eq("id", ingestionId);
 
+        Actuator.logEvent(ingestionId, userId, "info", "Triage", { action: "Re-run Initiated" });
+
         const filename = ingestion.filename;
         const filePath = ingestion.storage_path;
         if (!filePath) throw new Error("No storage path found for this ingestion");
@@ -295,7 +303,7 @@ export class IngestionService {
                 llm_provider: settingsRow.data?.llm_provider ?? undefined,
                 llm_model: settingsRow.data?.llm_model ?? undefined,
             };
-            const doc = { filePath, text: extractionContent };
+            const doc = { filePath, text: extractionContent, ingestionId, userId };
 
             const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
                 doc,
@@ -329,7 +337,11 @@ export class IngestionService {
                     policy_name: policyName,
                     extracted: mergedExtracted,
                     actions_taken: result.actionsExecuted,
-                    trace: result.trace,
+                    trace: [
+                        ...(ingestion.trace || []),
+                        { timestamp: new Date().toISOString(), step: "--- Re-run Initiated ---" },
+                        ...(result.trace || [])
+                    ],
                     baseline_config_id: baselineConfig?.id ?? null,
                 })
                 .eq("id", ingestionId);

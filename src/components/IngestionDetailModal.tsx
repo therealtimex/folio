@@ -135,33 +135,8 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onCompo
                     )}
 
                     {/* No details fallback */}
-                    {!extracted && !actions && !ing.error_message && (!ing.trace || ing.trace.length === 0) && (
+                    {!extracted && !actions && !ing.error_message && (
                         <p className="text-xs text-muted-foreground text-center py-4">No extracted data or actions recorded.</p>
-                    )}
-
-                    {/* AI Trace Terminal */}
-                    {ing.trace && ing.trace.length > 0 && (
-                        <div>
-                            <SectionLabel>Processing Trace</SectionLabel>
-                            <div className="rounded-xl bg-zinc-950 text-emerald-400 p-4 font-mono text-[10px] space-y-2.5 overflow-x-auto border border-zinc-800 shadow-inner">
-                                {ing.trace.map((t, i) => (
-                                    <div key={i} className="flex gap-3 leading-relaxed">
-                                        <span className="opacity-40 shrink-0">
-                                            {new Date(t.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                                        </span>
-                                        <div>
-                                            <span className="font-semibold text-zinc-100">{t.step}</span>
-                                            {t.details && Object.keys(t.details).length > 0 && (
-                                                <pre className="mt-1 flex text-emerald-500/80 whitespace-pre-wrap">
-                                                    <span className="select-none opacity-30 mr-2">↳</span>
-                                                    {JSON.stringify(t.details, null, 2)}
-                                                </pre>
-                                            )}
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
                     )}
                 </div>
 

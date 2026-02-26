@@ -10,7 +10,8 @@ import {
     Minus,
     Loader2,
     FileText,
-    ChevronRight
+    ChevronRight,
+    Terminal
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -19,6 +20,7 @@ import { api } from "../lib/api";
 import { getSupabaseClient } from "../lib/supabase-config";
 import { toast } from "./Toast";
 import { IngestionDetailModal } from "./IngestionDetailModal";
+import { IngestionTraceModal } from "./IngestionTraceModal";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -81,6 +83,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
     const [isUploading, setIsUploading] = useState(false);
     const [sessionToken, setSessionToken] = useState<string | null>(null);
     const [selected, setSelected] = useState<Ingestion | null>(null);
+    const [traceSelected, setTraceSelected] = useState<Ingestion | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const fetchIngestions = useCallback(async () => {
@@ -222,7 +225,10 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                                 <tr
                                     key={ing.id}
                                     onClick={() => setSelected(ing)}
-                                    className="hover:bg-muted/30 cursor-pointer transition-colors"
+                                    className={cn(
+                                        "cursor-pointer transition-colors",
+                                        ing.status === "processing" ? "animate-pulse bg-blue-500/5 hover:bg-blue-500/10" : "hover:bg-muted/30"
+                                    )}
                                 >
                                     <td className="px-5 py-3.5">
                                         <div className="font-medium text-sm truncate max-w-[220px]" title={ing.filename}>{ing.filename}</div>
@@ -240,6 +246,13 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                                     </td>
                                     <td className="px-4 py-3.5">
                                         <div className="flex items-center gap-1 justify-end">
+                                            <button
+                                                title="View Processing Trace"
+                                                onClick={(e) => { e.stopPropagation(); setTraceSelected(ing); }}
+                                                className="text-muted-foreground hover:text-emerald-500 p-1 transition-colors"
+                                            >
+                                                <Terminal className="w-3.5 h-3.5" />
+                                            </button>
                                             <button
                                                 title="Re-run"
                                                 onClick={(e) => handleRerun(ing.id, e)}
@@ -282,6 +295,14 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                         }
                         : undefined
                     }
+                />
+            )}
+
+            {/* Trace Modal */}
+            {traceSelected && (
+                <IngestionTraceModal
+                    ingestion={traceSelected}
+                    onClose={() => setTraceSelected(null)}
                 />
             )}
         </div>
