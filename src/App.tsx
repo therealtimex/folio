@@ -388,7 +388,7 @@ export function App() {
           )}
 
           {activePage === "dashboard" && (
-            <Dashboard configSnapshot={configSnapshot} configSource={configSource} />
+            <Dashboard configSnapshot={configSnapshot} configSource={configSource} setActivePage={setActivePage} />
           )}
           {activePage === "chat" && (
             <ChatPage />

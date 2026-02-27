@@ -30,6 +30,13 @@ export interface ChatSession {
   updated_at: string;
 }
 
+export interface DashboardStats {
+  totalDocuments: number;
+  activePolicies: number;
+  ragChunks: number;
+  automationRuns: number;
+}
+
 class HybridApiClient {
   private edgeFunctionsUrl: string;
   private expressApiUrl: string;
@@ -127,6 +134,14 @@ class HybridApiClient {
 
   getChatSessions(token?: string | null) {
     return this.expressRequest<{ success: boolean; sessions: ChatSession[] }>("/api/chat/sessions", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  getDashboardStats(token?: string | null) {
+    return this.expressRequest<{ success: boolean; stats: DashboardStats }>("/api/stats", {
       method: "GET",
       auth: Boolean(token),
       token

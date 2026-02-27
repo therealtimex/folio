@@ -1,101 +1,220 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "./ui/card";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Card, CardContent } from "./ui/card";
 import { Button } from "./ui/button";
-import { Badge } from "./ui/badge";
 import { Logo } from "./Logo";
-import { Settings2, Zap, LayoutDashboard, Database, ShieldCheck, Plus } from "lucide-react";
+import { FileText, Database, Share2, Activity, Upload, MessageSquare, Loader2 } from "lucide-react";
+import { cn } from "../lib/utils";
+import { api, DashboardStats } from "../lib/api";
+import { getSupabaseClient } from "../lib/supabase-config";
+import { toast } from "./Toast";
 
 interface DashboardProps {
     configSnapshot: any;
     configSource: string;
+    setActivePage: any;
 }
 
-export function Dashboard({ configSnapshot, configSource }: DashboardProps) {
+export function Dashboard({ configSnapshot, configSource, setActivePage }: DashboardProps) {
+    const [stats, setStats] = useState<DashboardStats | null>(null);
+    const [isLoadingStats, setIsLoadingStats] = useState(true);
+    const [isDragging, setIsDragging] = useState(false);
+    const [isUploading, setIsUploading] = useState(false);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const fetchStats = useCallback(async () => {
+        setIsLoadingStats(true);
+        try {
+            const supabase = getSupabaseClient();
+            if (!supabase) return;
+            const { data } = await supabase.auth.getSession();
+            const token = data.session?.access_token ?? null;
+            if (!token) return;
+
+            const res = await api.getDashboardStats(token);
+            if (res.data?.success) {
+                setStats(res.data.stats);
+            }
+        } catch (e) {
+            console.error("Failed to fetch dashboard stats", e);
+        } finally {
+            setIsLoadingStats(false);
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchStats();
+    }, [fetchStats]);
+
+    // ─── File handling ────────────────────────────────────────────────────────
+    const handleFiles = async (files: FileList | File[]) => {
+        const arr = Array.from(files);
+        if (!arr.length) return;
+
+        // Immediately navigate to the Funnel tab so the user can watch the pipeline
+        setActivePage("funnel");
+
+        setIsUploading(true);
+        try {
+            const supabase = getSupabaseClient();
+            if (!supabase) return;
+            const { data } = await supabase.auth.getSession();
+            const token = data.session?.access_token ?? null;
+            if (!token) return;
+
+            for (const file of arr) {
+                toast.info(`Ingesting ${file.name}…`);
+                const result = await api.uploadDocument?.(file, token);
+                if (result?.success) {
+                    if (result.ingestion?.status === "duplicate") {
+                        const orig = (result.ingestion.extracted as any)?.original_filename ?? "a previous upload";
+                        toast.warning(`${file.name} is a duplicate of "${orig}" — skipped.`);
+                    } else {
+                        toast.success(`${file.name} → ${result.ingestion?.status}`);
+                    }
+                } else {
+                    toast.error(`Failed to ingest ${file.name}`);
+                }
+            }
+            // Refresh stats after upload
+            await fetchStats();
+        } finally {
+            setIsUploading(false);
+        }
+    };
+
+    const handleDrop = (e: React.DragEvent) => {
+        e.preventDefault();
+        setIsDragging(false);
+        handleFiles(e.dataTransfer.files);
+    };
+
     return (
         <div className="w-full mx-auto px-8 py-10 space-y-12 animate-in fade-in duration-700">
+            {/* Header Content */}
             <div className="text-center space-y-3">
                 <h2 className="text-4xl font-black tracking-tight flex items-center justify-center gap-3">
                     <Logo className="w-10 h-10 animate-pulse" />
-                    Foundation Dashboard
+                    Command Center
                 </h2>
                 <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-                    Monitoring the core intelligence layer and foundational runtime contracts.
+                    Central intelligence hub for document ingestion, routing, and synthetic knowledge.
                 </p>
             </div>
 
             <div className="w-full space-y-10">
-                {/* Email Accounts equivalent section */}
-                <div className="space-y-6">
-                    <div className="flex items-center gap-3 border-b pb-4">
-                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                            <Database className="w-6 h-6" />
-                        </div>
-                        <div>
-                            <h3 className="text-lg font-bold">Cloud Foundations</h3>
-                            <p className="text-sm text-muted-foreground">Connected primary storage and identity providers.</p>
-                        </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <Card className="border-border/40 shadow-sm hover:shadow-md transition-all">
-                            <CardHeader className="flex flex-row items-center justify-between pb-2 bg-muted/20">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-emerald-100 dark:bg-emerald-950 flex items-center justify-center text-emerald-600">
-                                        <ShieldCheck className="w-6 h-6" />
-                                    </div>
-                                    <div className="space-y-0.5">
-                                        <CardTitle className="text-sm font-bold">Supabase DB</CardTitle>
-                                        <CardDescription className="text-[11px]">{configSource}</CardDescription>
-                                    </div>
-                                </div>
-                                <Badge variant="outline" className="bg-emerald-500/5 text-emerald-500 border-emerald-500/20 text-[10px] font-black uppercase">Active</Badge>
-                            </CardHeader>
-                            <CardContent className="pt-4">
-                                <p className="text-xs text-muted-foreground truncate font-mono">{configSnapshot?.url || "Not Configured"}</p>
-                            </CardContent>
-                        </Card>
-
-                        <Card className="border-border/40 shadow-sm opacity-50 border-dashed">
-                            <CardHeader className="flex flex-row items-center justify-between pb-2">
-                                <div className="flex items-center gap-3">
-                                    <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-muted-foreground">
-                                        <Plus className="w-5 h-5" />
-                                    </div>
-                                    <div className="space-y-0.5">
-                                        <CardTitle className="text-sm font-bold">Edge Protocol</CardTitle>
-                                        <CardDescription className="text-[11px]">Add custom provider</CardDescription>
-                                    </div>
-                                </div>
-                            </CardHeader>
-                        </Card>
-                    </div>
+                {/* 1. High-Level Metrics */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    <StatCard
+                        title="Documents Ingested"
+                        value={stats?.totalDocuments}
+                        icon={<FileText className="w-5 h-5 text-blue-500" />}
+                        isLoading={isLoadingStats}
+                        colorClass="bg-blue-500/10"
+                    />
+                    <StatCard
+                        title="Active Policies"
+                        value={stats?.activePolicies}
+                        icon={<Share2 className="w-5 h-5 text-emerald-500" />}
+                        isLoading={isLoadingStats}
+                        colorClass="bg-emerald-500/10"
+                    />
+                    <StatCard
+                        title="Knowledge Chunks"
+                        value={stats?.ragChunks}
+                        icon={<Database className="w-5 h-5 text-purple-500" />}
+                        isLoading={isLoadingStats}
+                        colorClass="bg-purple-500/10"
+                    />
+                    <StatCard
+                        title="Automation Runs"
+                        value={stats?.automationRuns}
+                        icon={<Activity className="w-5 h-5 text-amber-500" />}
+                        isLoading={isLoadingStats}
+                        colorClass="bg-amber-500/10"
+                    />
                 </div>
 
-                {/* System Configuration equivalent */}
-                <div className="space-y-6">
-                    <div className="flex items-center gap-3 border-b pb-4">
-                        <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center text-primary">
-                            <Settings2 className="w-6 h-6" />
-                        </div>
-                        <div>
-                            <h3 className="text-lg font-bold">Runtime Configuration</h3>
-                            <p className="text-sm text-muted-foreground">Define synchronization loops and processing logic.</p>
+                {/* 2. Actions & Drop Zone */}
+                <div className="grid lg:grid-cols-3 gap-6">
+                    {/* Main Drop Zone */}
+                    <div className="lg:col-span-2">
+                        <div
+                            onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+                            onDragLeave={() => setIsDragging(false)}
+                            onDrop={handleDrop}
+                            onClick={() => fileInputRef.current?.click()}
+                            className={cn(
+                                "h-full rounded-2xl border-2 border-dashed transition-all cursor-pointer flex flex-col items-center justify-center gap-4 py-16",
+                                isDragging
+                                    ? "border-primary bg-primary/5 scale-[1.01]"
+                                    : "border-muted-foreground/20 hover:border-primary/50 hover:bg-muted/30"
+                            )}
+                        >
+                            <input ref={fileInputRef} type="file" multiple hidden onChange={(e) => e.target.files && handleFiles(e.target.files)} />
+                            {isUploading ? (
+                                <Loader2 className="w-12 h-12 animate-spin text-primary" />
+                            ) : (
+                                <Upload className={cn("w-12 h-12 transition-colors", isDragging ? "text-primary" : "text-muted-foreground/50")} />
+                            )}
+                            <div className="text-center space-y-1">
+                                <p className="text-lg font-medium text-foreground">
+                                    {isDragging ? "Drop to ingest..." : "Drag & drop files to ingest"}
+                                </p>
+                                <p className="text-sm text-muted-foreground/60">
+                                    Supports .pdf, .docx, .md, .txt (up to 20MB)
+                                </p>
+                            </div>
                         </div>
                     </div>
 
-                    <Card className="border-border/40 shadow-sm">
-                        <CardContent className="p-8 flex flex-col items-center justify-center text-center space-y-4">
-                            <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mb-2">
-                                <Zap className="w-8 h-8 text-muted-foreground" />
+                    {/* Action Cards */}
+                    <div className="flex flex-col gap-4">
+                        <Card
+                            className="flex-1 cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-all flex flex-col items-center justify-center p-6 text-center shadow-sm"
+                            onClick={() => setActivePage("chat")}
+                        >
+                            <div className="w-12 h-12 rounded-xl bg-indigo-500/10 flex items-center justify-center mb-4">
+                                <MessageSquare className="w-6 h-6 text-indigo-500" />
                             </div>
-                            <h4 className="text-sm font-bold">Parity Engine Not Engaged</h4>
-                            <p className="text-xs text-muted-foreground max-w-sm">
-                                The foundation is ready, but no active processing rules are configured. Visit Settings to define your first parity contract.
-                            </p>
-                            <Button variant="outline" className="h-9 px-6 rounded-full text-xs font-bold" disabled>Configure Engine</Button>
-                        </CardContent>
-                    </Card>
+                            <h3 className="font-bold mb-1">Chat with Data</h3>
+                            <p className="text-xs text-muted-foreground">Ask questions against your vectorized knowledge base.</p>
+                        </Card>
+
+                        <Card
+                            className="flex-1 cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-all flex flex-col items-center justify-center p-6 text-center shadow-sm"
+                            onClick={() => setActivePage("policies")}
+                        >
+                            <div className="w-12 h-12 rounded-xl bg-orange-500/10 flex items-center justify-center mb-4">
+                                <Share2 className="w-6 h-6 text-orange-500" />
+                            </div>
+                            <h3 className="font-bold mb-1">Create Policy</h3>
+                            <p className="text-xs text-muted-foreground">Define a new routing and automation contract.</p>
+                        </Card>
+                    </div>
                 </div>
             </div>
         </div>
+    );
+}
+
+function StatCard({ title, value, icon, isLoading, colorClass }: { title: string, value?: number, icon: React.ReactNode, isLoading: boolean, colorClass: string }) {
+    return (
+        <Card className="shadow-sm">
+            <CardContent className="p-6">
+                <div className="flex items-center justify-between mb-4">
+                    <div className={cn("w-10 h-10 rounded-xl flex items-center justify-center", colorClass)}>
+                        {icon}
+                    </div>
+                </div>
+                <div className="space-y-1">
+                    <p className="text-sm text-muted-foreground font-medium">{title}</p>
+                    {isLoading ? (
+                        <div className="h-8 w-16 bg-muted animate-pulse rounded-md" />
+                    ) : (
+                        <p className="text-3xl font-black">{value !== undefined ? value.toLocaleString() : "0"}</p>
+                    )}
+                </div>
+            </CardContent>
+        </Card>
     );
 }

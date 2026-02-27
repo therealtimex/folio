@@ -13,6 +13,7 @@ import accountsRoutes from "./accounts.js";
 import settingsRoutes from "./settings.js";
 import rulesRoutes from "./rules.js";
 import chatRoutes from "./chat.js";
+import statsRoutes from "./stats.js";
 
 const router = Router();
 
@@ -29,5 +30,6 @@ router.use("/accounts", accountsRoutes);
 router.use("/settings", settingsRoutes);
 router.use("/rules", rulesRoutes);
 router.use("/chat", chatRoutes);
+router.use("/stats", statsRoutes);
 
 export default router;
