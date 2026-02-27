@@ -11,10 +11,12 @@ import {
     Loader2,
     FileText,
     ChevronRight,
+    ChevronLeft,
     Terminal,
     Copy,
     Tag,
-    X
+    X,
+    Search
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -170,6 +172,54 @@ function TagFilterBar({ allTags, activeFilters, onToggle, onClear }: {
     );
 }
 
+// ─── Pagination bar ───────────────────────────────────────────────────────────
+
+const PAGE_SIZE = 20;
+
+function PaginationBar({ page, total, pageSize, onPage }: {
+    page: number;
+    total: number;
+    pageSize: number;
+    onPage: (p: number) => void;
+}) {
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+    if (totalPages <= 1 && total <= pageSize) return null;
+
+    const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+    const to = Math.min(page * pageSize, total);
+
+    return (
+        <div className="flex items-center justify-between px-1 pt-2">
+            <p className="text-xs text-muted-foreground">
+                {total === 0 ? "No results" : `${from}–${to} of ${total}`}
+            </p>
+            <div className="flex items-center gap-1">
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 rounded-lg"
+                    onClick={() => onPage(page - 1)}
+                    disabled={page <= 1}
+                >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                </Button>
+                <span className="text-xs text-muted-foreground px-2">
+                    Page {page} of {totalPages}
+                </span>
+                <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-7 px-2 rounded-lg"
+                    onClick={() => onPage(page + 1)}
+                    disabled={page >= totalPages}
+                >
+                    <ChevronRight className="w-3.5 h-3.5" />
+                </Button>
+            </div>
+        </div>
+    );
+}
+
 // ─── FunnelPage ───────────────────────────────────────────────────────────────
 
 interface FunnelPageProps {
@@ -178,6 +228,8 @@ interface FunnelPageProps {
 
 export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
     const [ingestions, setIngestions] = useState<Ingestion[]>([]);
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
     const [isLoading, setIsLoading] = useState(true);
     const [isDragging, setIsDragging] = useState(false);
     const [isUploading, setIsUploading] = useState(false);
@@ -185,14 +237,42 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
     const [selected, setSelected] = useState<Ingestion | null>(null);
     const [traceSelected, setTraceSelected] = useState<Ingestion | null>(null);
     const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(new Set());
+    // All tags across all pages — fetched separately to keep the tag bar stable
+    const [allTags, setAllTags] = useState<string[]>([]);
+    // Search
+    const [searchInput, setSearchInput] = useState("");
+    const [query, setQuery] = useState(""); // debounced
+    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
-    const fetchIngestions = useCallback(async () => {
+    // ─── Debounce search input ────────────────────────────────────────────────
+    const handleSearchInput = (value: string) => {
+        setSearchInput(value);
+        if (debounceRef.current) clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(() => {
+            setQuery(value);
+            setPage(1);
+        }, 300);
+    };
+
+    // ─── Fetch one page ───────────────────────────────────────────────────────
+    const fetchIngestions = useCallback(async (p = page) => {
+        if (sessionToken === null) return;
         setIsLoading(true);
-        const resp = await api.getIngestions?.(sessionToken);
-        setIngestions(resp?.data?.ingestions ?? []);
+        const resp = await api.getIngestions({ page: p, pageSize: PAGE_SIZE, q: query || undefined }, sessionToken);
+        const list: Ingestion[] = resp?.data?.ingestions ?? [];
+        setIngestions(list);
+        setTotal(resp?.data?.total ?? 0);
         setIsLoading(false);
-    }, [sessionToken]);
+
+        // Rebuild allTags from the current page to keep filter bar up to date.
+        // For a richer tag bar we'd need a separate endpoint, but for now this
+        // gives fast feedback and is consistent with what the user sees.
+        setAllTags((prev) => {
+            const combined = new Set([...prev, ...list.flatMap((i) => i.tags ?? [])]);
+            return [...combined].sort();
+        });
+    }, [sessionToken, query, page]);
 
     useEffect(() => {
         const supabase = getSupabaseClient();
@@ -204,19 +284,12 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
     }, []);
 
     useEffect(() => {
-        if (sessionToken !== null) fetchIngestions();
-    }, [sessionToken, fetchIngestions]);
+        if (sessionToken !== null) fetchIngestions(page);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sessionToken, query, page]);
 
-    // All unique tags sorted alphabetically
-    const allTags = useMemo(() => {
-        const set = new Set<string>();
-        for (const ing of ingestions) {
-            for (const t of ing.tags ?? []) set.add(t);
-        }
-        return [...set].sort();
-    }, [ingestions]);
-
-    // Filtered list — AND logic: every active filter tag must be present
+    // ─── Tag filter: client-side within the current page ─────────────────────
+    // Tags across pages stay visible; search + pagination narrow server results.
     const visibleIngestions = useMemo(() => {
         if (!activeTagFilters.size) return ingestions;
         return ingestions.filter((ing) =>
@@ -230,8 +303,10 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
             next.has(tag) ? next.delete(tag) : next.add(tag);
             return next;
         });
+        setPage(1);
     };
 
+    // ─── File handling ────────────────────────────────────────────────────────
     const handleFiles = async (files: FileList | File[]) => {
         const arr = Array.from(files);
         if (!arr.length) return;
@@ -251,7 +326,8 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                     toast.error(`Failed to ingest ${file.name}`);
                 }
             }
-            await fetchIngestions();
+            setPage(1);
+            await fetchIngestions(1);
         } finally {
             setIsUploading(false);
         }
@@ -267,7 +343,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
         e.stopPropagation();
         await api.rerunIngestion?.(id, sessionToken);
         toast.success("Re-running…");
-        await fetchIngestions();
+        await fetchIngestions(page);
     };
 
     const handleDelete = async (id: string, e: React.MouseEvent) => {
@@ -275,19 +351,27 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
         if (!window.confirm("Delete this ingestion record?")) return;
         await api.deleteIngestion?.(id, sessionToken);
         toast.success("Deleted.");
-        setIngestions((prev) => prev.filter((x) => x.id !== id));
+        // If we deleted the last item on a non-first page, step back
+        const newTotal = total - 1;
+        const newTotalPages = Math.max(1, Math.ceil(newTotal / PAGE_SIZE));
+        const newPage = Math.min(page, newTotalPages);
+        setPage(newPage);
+        await fetchIngestions(newPage);
     };
 
     const handleTagsChange = async (id: string, tags: string[]) => {
-        setIngestions((prev) =>
-            prev.map((ing) => (ing.id === id ? { ...ing, tags } : ing))
-        );
+        setIngestions((prev) => prev.map((ing) => (ing.id === id ? { ...ing, tags } : ing)));
         if (selected?.id === id) setSelected((prev) => prev ? { ...prev, tags } : prev);
         await api.updateIngestionTags(id, tags, sessionToken);
+        // Rebuild allTags
+        setAllTags((prev) => {
+            const combined = new Set([...prev, ...tags]);
+            return [...combined].sort();
+        });
     };
 
     return (
-        <div className="w-full mx-auto px-8 py-10 space-y-8 animate-in fade-in duration-500">
+        <div className="w-full mx-auto px-8 py-10 space-y-6 animate-in fade-in duration-500">
             {/* Header */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -300,7 +384,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                     </div>
                 </div>
                 <div className="flex gap-2">
-                    <Button variant="outline" size="sm" onClick={fetchIngestions} className="gap-2 rounded-xl">
+                    <Button variant="outline" size="sm" onClick={() => fetchIngestions(page)} className="gap-2 rounded-xl">
                         <RefreshCw className="w-3.5 h-3.5" />Refresh
                     </Button>
                     <Button size="sm" onClick={() => fileInputRef.current?.click()} disabled={isUploading} className="gap-2 rounded-xl">
@@ -331,15 +415,38 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                 <p className="text-xs text-muted-foreground/60">.txt, .md, .pdf, .docx — up to 20MB</p>
             </div>
 
-            {/* Tag filter bar */}
-            {allTags.length > 0 && (
-                <TagFilterBar
-                    allTags={allTags}
-                    activeFilters={activeTagFilters}
-                    onToggle={toggleTagFilter}
-                    onClear={() => setActiveTagFilters(new Set())}
-                />
-            )}
+            {/* Search + Tag filters */}
+            <div className="space-y-3">
+                {/* Search bar */}
+                <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                    <input
+                        type="text"
+                        value={searchInput}
+                        onChange={(e) => handleSearchInput(e.target.value)}
+                        placeholder="Search filename, policy, summary…"
+                        className="w-full pl-9 pr-9 py-2 text-sm rounded-xl border bg-background placeholder:text-muted-foreground/50 outline-none focus:ring-2 focus:ring-primary/30 transition"
+                    />
+                    {searchInput && (
+                        <button
+                            onClick={() => { setSearchInput(""); setQuery(""); setPage(1); }}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                        >
+                            <X className="w-3.5 h-3.5" />
+                        </button>
+                    )}
+                </div>
+
+                {/* Tag filter bar */}
+                {allTags.length > 0 && (
+                    <TagFilterBar
+                        allTags={allTags}
+                        activeFilters={activeTagFilters}
+                        onToggle={toggleTagFilter}
+                        onClear={() => setActiveTagFilters(new Set())}
+                    />
+                )}
+            </div>
 
             {/* Table */}
             <div className="rounded-2xl border overflow-hidden">
@@ -367,10 +474,22 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                                 <td colSpan={6} className="text-center py-16 text-muted-foreground">
                                     <FileText className="w-8 h-8 mx-auto mb-3 opacity-30" />
                                     <p className="text-sm">
-                                        {activeTagFilters.size > 0
-                                            ? "No documents match the selected tags."
+                                        {query || activeTagFilters.size > 0
+                                            ? "No documents match your search."
                                             : "No ingestions yet — upload a document above."}
                                     </p>
+                                    {(query || activeTagFilters.size > 0) && (
+                                        <button
+                                            className="mt-2 text-xs text-primary hover:underline"
+                                            onClick={() => {
+                                                setSearchInput(""); setQuery("");
+                                                setActiveTagFilters(new Set());
+                                                setPage(1);
+                                            }}
+                                        >
+                                            Clear filters
+                                        </button>
+                                    )}
                                 </td>
                             </tr>
                         ) : (
@@ -380,7 +499,9 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                                     onClick={() => setSelected(ing)}
                                     className={cn(
                                         "cursor-pointer transition-colors",
-                                        ing.status === "processing" ? "animate-pulse bg-blue-500/5 hover:bg-blue-500/10" : "hover:bg-muted/30"
+                                        ing.status === "processing"
+                                            ? "animate-pulse bg-blue-500/5 hover:bg-blue-500/10"
+                                            : "hover:bg-muted/30"
                                     )}
                                 >
                                     <td className="px-5 py-3.5">
@@ -438,6 +559,14 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                 </table>
             </div>
 
+            {/* Pagination */}
+            <PaginationBar
+                page={page}
+                total={total}
+                pageSize={PAGE_SIZE}
+                onPage={(p) => setPage(p)}
+            />
+
             {/* Detail Modal */}
             {selected && (
                 <IngestionDetailModal
@@ -446,7 +575,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                     onTagsChange={(tags) => handleTagsChange(selected.id, tags)}
                     onRerun={async () => {
                         await api.rerunIngestion?.(selected.id, sessionToken);
-                        await fetchIngestions();
+                        await fetchIngestions(page);
                         setSelected(null);
                         toast.success("Re-running ingestion…");
                     }}

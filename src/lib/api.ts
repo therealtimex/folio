@@ -362,10 +362,16 @@ class HybridApiClient {
 
   // ─── Ingestion / Funnel API ─────────────────────────────────────────────────
 
-  getIngestions(token?: string | null) {
-    return this.expressRequest<{ success: boolean; ingestions: any[] }>("/api/ingestions", {
-      auth: Boolean(token), token
-    });
+  getIngestions(params: { page?: number; pageSize?: number; q?: string } = {}, token?: string | null) {
+    const qs = new URLSearchParams();
+    if (params.page) qs.set("page", String(params.page));
+    if (params.pageSize) qs.set("pageSize", String(params.pageSize));
+    if (params.q) qs.set("q", params.q);
+    const query = qs.toString() ? `?${qs}` : "";
+    return this.expressRequest<{ success: boolean; ingestions: any[]; total: number; page: number; pageSize: number }>(
+      `/api/ingestions${query}`,
+      { auth: Boolean(token), token }
+    );
   }
 
   uploadDocument(file: File, token?: string | null) {

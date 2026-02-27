@@ -13,7 +13,7 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 
 
 router.use(optionalAuth);
 
-// GET /api/ingestions — list ingestions
+// GET /api/ingestions — list ingestions (paginated, searchable)
 router.get(
     "/",
     asyncHandler(async (req, res) => {
@@ -21,8 +21,11 @@ router.get(
             res.status(401).json({ success: false, error: "Authentication required" });
             return;
         }
-        const ingestions = await IngestionService.list(req.supabase, req.user.id);
-        res.json({ success: true, ingestions });
+        const page = Math.max(1, parseInt(req.query["page"] as string) || 1);
+        const pageSize = Math.min(100, Math.max(1, parseInt(req.query["pageSize"] as string) || 20));
+        const query = (req.query["q"] as string | undefined)?.trim() || undefined;
+        const { ingestions, total } = await IngestionService.list(req.supabase, req.user.id, { page, pageSize, query });
+        res.json({ success: true, ingestions, total, page, pageSize });
     })
 );
 

@@ -439,17 +439,41 @@ export class IngestionService {
 
     /**
      * List ingestions for a user, newest first.
+     * Supports server-side pagination and ILIKE search across native text columns
+     * (filename, policy_name, summary). Tags are handled client-side via the
+     * filter bar; extracted JSONB search requires a tsvector migration (deferred).
      */
-    static async list(supabase: SupabaseClient, userId: string, limit = 50): Promise<Ingestion[]> {
-        const { data, error } = await supabase
-            .from("ingestions")
-            .select("*")
-            .eq("user_id", userId)
-            .order("created_at", { ascending: false })
-            .limit(limit);
+    static async list(
+        supabase: SupabaseClient,
+        userId: string,
+        opts: { page?: number; pageSize?: number; query?: string } = {}
+    ): Promise<{ ingestions: Ingestion[]; total: number }> {
+        const { page = 1, pageSize = 20, query } = opts;
+        const from = (page - 1) * pageSize;
+        const to = from + pageSize - 1;
 
+        let q = supabase
+            .from("ingestions")
+            .select("*", { count: "exact" })
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false });
+
+        if (query?.trim()) {
+            const term = `%${query.trim()}%`;
+            // PostgREST .or() only supports native column types — no ::cast expressions.
+            // Searching filename, policy_name, and summary covers the most practical cases.
+            q = q.or(
+                `filename.ilike.${term},` +
+                `policy_name.ilike.${term},` +
+                `summary.ilike.${term}`
+            );
+        }
+
+        q = q.range(from, to);
+
+        const { data, error, count } = await q;
         if (error) throw new Error(`Failed to list ingestions: ${error.message}`);
-        return data as Ingestion[];
+        return { ingestions: data as Ingestion[], total: count ?? 0 };
     }
 
     /**
