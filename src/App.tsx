@@ -15,6 +15,7 @@ import { MigrationModal } from "./components/migration/MigrationModal";
 import { clearSupabaseConfig, getConfigSource, getSupabaseConfig } from "./lib/supabase-config";
 import { PoliciesPage } from "./components/PoliciesPage";
 import { FunnelPage } from "./components/FunnelPage";
+import { ChatPage } from "./components/chat/ChatPage";
 import { Button } from "./components/ui/button";
 import { Badge } from "./components/ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "./components/ui/alert";
@@ -33,10 +34,11 @@ import {
   AlertCircle,
   Loader2,
   ScrollText,
-  Funnel
+  Funnel,
+  MessageSquare
 } from "lucide-react";
 
-type Page = "dashboard" | "funnel" | "policies" | "account" | "config";
+type Page = "dashboard" | "chat" | "funnel" | "policies" | "account" | "config";
 
 export function App() {
   const config = useMemo(() => getSupabaseConfig(), []);
@@ -222,6 +224,7 @@ export function App() {
 
   const navItems = [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "chat", label: "Chat", icon: MessageSquare },
     { id: "funnel", label: "Funnel", icon: Funnel },
     { id: "policies", label: "Policies", icon: ScrollText },
     { id: "config", label: "Configuration", icon: Settings2 },
@@ -386,6 +389,9 @@ export function App() {
 
           {activePage === "dashboard" && (
             <Dashboard configSnapshot={configSnapshot} configSource={configSource} />
+          )}
+          {activePage === "chat" && (
+            <ChatPage />
           )}
           {activePage === "funnel" && (
             <FunnelPage

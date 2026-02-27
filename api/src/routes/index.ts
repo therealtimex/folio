@@ -12,6 +12,7 @@ import baselineConfigRoutes from "./baseline-config.js";
 import accountsRoutes from "./accounts.js";
 import settingsRoutes from "./settings.js";
 import rulesRoutes from "./rules.js";
+import chatRoutes from "./chat.js";
 
 const router = Router();
 
@@ -27,5 +28,6 @@ router.use("/baseline-config", baselineConfigRoutes);
 router.use("/accounts", accountsRoutes);
 router.use("/settings", settingsRoutes);
 router.use("/rules", rulesRoutes);
+router.use("/chat", chatRoutes);
 
 export default router;

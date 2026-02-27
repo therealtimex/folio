@@ -6,6 +6,30 @@ interface ApiOptions extends RequestInit {
   token?: string | null;
 }
 
+export interface ChatSource {
+  id: string;
+  ingestion_id: string;
+  content: string;
+  similarity: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  session_id?: string;
+  user_id?: string;
+  role: "user" | "assistant" | "system";
+  content: string;
+  context_sources?: ChatSource[];
+  created_at: string;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  created_at?: string;
+  updated_at: string;
+}
+
 class HybridApiClient {
   private edgeFunctionsUrl: string;
   private expressApiUrl: string;
@@ -85,6 +109,52 @@ class HybridApiClient {
     return this.request<T>(this.expressApiUrl, endpoint, {
       ...options,
       headers
+    });
+  }
+
+  get<T>(endpoint: string, options: ApiOptions = {}) {
+    return this.expressRequest<T>(endpoint, { method: "GET", ...options, auth: true });
+  }
+
+  post<T>(endpoint: string, data?: unknown, options: ApiOptions = {}) {
+    return this.expressRequest<T>(endpoint, {
+      method: "POST",
+      body: data ? JSON.stringify(data) : undefined,
+      ...options,
+      auth: true
+    });
+  }
+
+  getChatSessions(token?: string | null) {
+    return this.expressRequest<{ success: boolean; sessions: ChatSession[] }>("/api/chat/sessions", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  createChatSession(token?: string | null) {
+    return this.expressRequest<{ success: boolean; session: ChatSession }>("/api/chat/sessions", {
+      method: "POST",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  getChatMessages(sessionId: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; messages: ChatMessage[] }>(`/api/chat/sessions/${sessionId}/messages`, {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  sendChatMessage(payload: { sessionId: string; content: string }, token?: string | null) {
+    return this.expressRequest<{ success: boolean; message: ChatMessage }>("/api/chat/message", {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify(payload)
     });
   }
 
