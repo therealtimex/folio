@@ -7,6 +7,7 @@ import { PolicyEngine } from "./PolicyEngine.js";
 import { BaselineConfigService } from "./BaselineConfigService.js";
 import { Actuator } from "../utils/Actuator.js";
 import { RAGService } from "./RAGService.js";
+import { SDKService } from "./SDKService.js";
 
 const logger = createLogger("IngestionService");
 
@@ -75,6 +76,8 @@ export interface Ingestion {
     error_message?: string;
     storage_path?: string;
     trace?: Array<{ timestamp: string; step: string; details?: any }>;
+    tags?: string[];
+    summary?: string | null;
     created_at: string;
     updated_at: string;
 }
@@ -202,7 +205,7 @@ export class IngestionService {
                 });
 
                 // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
-                const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
+                const { entities: baselineEntities, tags: autoTags } = await PolicyEngine.extractBaseline(
                     doc,
                     { context: baselineConfig?.context, fields: baselineConfig?.fields },
                     llmSettings
@@ -242,6 +245,7 @@ export class IngestionService {
                         extracted: mergedExtracted,
                         actions_taken: result.actionsExecuted,
                         trace: result.trace,
+                        tags: autoTags,
                         baseline_config_id: baselineConfig?.id ?? null,
                     })
                     .eq("id", ingestion.id)
@@ -308,7 +312,7 @@ export class IngestionService {
 
         await supabase
             .from("ingestions")
-            .update({ status: "processing", error_message: null, policy_id: null, policy_name: null, extracted: {}, actions_taken: [] })
+            .update({ status: "processing", error_message: null, policy_id: null, policy_name: null, extracted: {}, actions_taken: [], summary: null })
             .eq("id", ingestionId);
 
         Actuator.logEvent(ingestionId, userId, "info", "Triage", { action: "Re-run Initiated" }, supabase);
@@ -360,7 +364,7 @@ export class IngestionService {
                 logger.error(`RAG embedding failed during rerun for ${ingestionId}`, err);
             });
 
-            const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
+            const { entities: baselineEntities, tags: autoTags } = await PolicyEngine.extractBaseline(
                 doc,
                 { context: baselineConfig?.context, fields: baselineConfig?.fields },
                 llmSettings
@@ -384,6 +388,10 @@ export class IngestionService {
             const finalStatus = result.status === "fallback" ? "no_match" : result.status;
             const mergedExtracted = { ...baselineEntities, ...result.extractedData };
 
+            // Preserve any human-added tags; merge with freshly generated auto-tags.
+            const existingTags: string[] = Array.isArray(ingestion.tags) ? ingestion.tags : [];
+            const mergedTags = [...new Set([...autoTags, ...existingTags])];
+
             await supabase
                 .from("ingestions")
                 .update({
@@ -397,6 +405,7 @@ export class IngestionService {
                         { timestamp: new Date().toISOString(), step: "--- Re-run Initiated ---" },
                         ...(result.trace || [])
                     ],
+                    tags: mergedTags,
                     baseline_config_id: baselineConfig?.id ?? null,
                 })
                 .eq("id", ingestionId);
@@ -468,5 +477,89 @@ export class IngestionService {
 
         if (error) throw new Error(`Failed to delete ingestion: ${error.message}`);
         return (count ?? 0) > 0;
+    }
+
+    /**
+     * Generate (or return cached) a 2-3 sentence prose summary for an ingestion.
+     * Builds the prompt from already-extracted entities — no file I/O needed.
+     * The result is saved back to ingestion.summary so subsequent calls are instant.
+     */
+    static async summarize(
+        id: string,
+        supabase: SupabaseClient,
+        userId: string,
+        llmSettings: { llm_provider?: string; llm_model?: string } = {}
+    ): Promise<string | null> {
+        const { data: ing } = await supabase
+            .from("ingestions")
+            .select("id, filename, extracted, summary, status")
+            .eq("id", id)
+            .eq("user_id", userId)
+            .single();
+
+        if (!ing) throw new Error("Ingestion not found");
+
+        // Return cached summary if available
+        if (ing.summary) return ing.summary as string;
+
+        // Cannot summarise documents that haven't been processed yet
+        if (ing.status === "pending" || ing.status === "processing") return null;
+
+        const sdk = SDKService.getSDK();
+        if (!sdk) {
+            logger.warn("SDK unavailable — skipping summary generation");
+            return null;
+        }
+
+        const extracted: Record<string, unknown> = ing.extracted ?? {};
+        const entityLines = Object.entries(extracted)
+            .filter(([, v]) => v != null && String(v).trim() !== "")
+            .map(([k, v]) => `${k}: ${Array.isArray(v) ? (v as unknown[]).join(", ") : String(v)}`);
+
+        if (entityLines.length === 0) return null;
+
+        const { provider, model } = await SDKService.resolveChatProvider(llmSettings);
+
+        const userPrompt =
+            `Summarize this document:\nFilename: ${ing.filename}\n` +
+            entityLines.join("\n");
+
+        try {
+            const result = await sdk.llm.chat(
+                [
+                    {
+                        role: "system",
+                        content:
+                            "You are a document assistant. Write a concise 2-3 sentence prose summary of a document " +
+                            "based on its extracted metadata. Be specific — name the issuer, amount, date, and purpose " +
+                            "where available. Plain prose only, no bullet points or markdown formatting."
+                    },
+                    { role: "user", content: userPrompt }
+                ],
+                { provider, model }
+            );
+
+            const summary: string =
+                (result as any).response?.content ??
+                (result as any).content ??
+                (result as any).message?.content ??
+                (result as any).choices?.[0]?.message?.content ??
+                "";
+
+            if (!summary.trim()) return null;
+
+            // Cache the result
+            await supabase
+                .from("ingestions")
+                .update({ summary })
+                .eq("id", id)
+                .eq("user_id", userId);
+
+            logger.info(`Summary generated and cached for ingestion ${id}`);
+            return summary;
+        } catch (err) {
+            logger.error("Summary generation failed", { err });
+            return null;
+        }
     }
 }

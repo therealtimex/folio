@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
     Funnel,
     Upload,
@@ -12,7 +12,9 @@ import {
     FileText,
     ChevronRight,
     Terminal,
-    Copy
+    Copy,
+    Tag,
+    X
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -38,7 +40,27 @@ export interface Ingestion {
     actions_taken?: string[];
     error_message?: string;
     trace?: Array<{ timestamp: string; step: string; details?: any }>;
+    tags?: string[];
+    summary?: string | null;
     created_at: string;
+}
+
+// ─── Tag colors — deterministic hash so the same tag is always the same color ─
+
+const TAG_PALETTES = [
+    "bg-blue-500/10 text-blue-600 border-blue-500/20",
+    "bg-emerald-500/10 text-emerald-600 border-emerald-500/20",
+    "bg-amber-500/10 text-amber-700 border-amber-500/20",
+    "bg-violet-500/10 text-violet-600 border-violet-500/20",
+    "bg-rose-500/10 text-rose-600 border-rose-500/20",
+    "bg-cyan-500/10 text-cyan-600 border-cyan-500/20",
+    "bg-orange-500/10 text-orange-600 border-orange-500/20",
+];
+
+export function tagColor(tag: string): string {
+    let hash = 0;
+    for (const c of tag) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
+    return TAG_PALETTES[hash % TAG_PALETTES.length];
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -72,6 +94,82 @@ function fileSize(bytes?: number) {
     return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 }
 
+// ─── Inline tag chips for table rows ─────────────────────────────────────────
+
+function RowTags({ tags, activeFilters, onToggle }: {
+    tags: string[];
+    activeFilters: Set<string>;
+    onToggle: (tag: string, e: React.MouseEvent) => void;
+}) {
+    if (!tags.length) return null;
+    const visible = tags.slice(0, 3);
+    const overflow = tags.length - visible.length;
+    return (
+        <div className="flex flex-wrap gap-1 mt-1">
+            {visible.map((t) => (
+                <button
+                    key={t}
+                    onClick={(e) => onToggle(t, e)}
+                    className={cn(
+                        "inline-flex items-center text-[9px] px-1.5 py-0 rounded-full border transition-all",
+                        tagColor(t),
+                        activeFilters.has(t) && "ring-1 ring-current font-semibold"
+                    )}
+                >
+                    {t}
+                </button>
+            ))}
+            {overflow > 0 && (
+                <span className="text-[9px] text-muted-foreground">+{overflow}</span>
+            )}
+        </div>
+    );
+}
+
+// ─── Tag filter bar ───────────────────────────────────────────────────────────
+
+function TagFilterBar({ allTags, activeFilters, onToggle, onClear }: {
+    allTags: string[];
+    activeFilters: Set<string>;
+    onToggle: (tag: string) => void;
+    onClear: () => void;
+}) {
+    if (!allTags.length) return null;
+    return (
+        <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground shrink-0">
+                <Tag className="w-3 h-3" />
+                <span>Filter by tag:</span>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+                {allTags.map((tag) => (
+                    <button
+                        key={tag}
+                        onClick={() => onToggle(tag)}
+                        className={cn(
+                            "inline-flex items-center text-[10px] px-2 py-0.5 rounded-full border transition-all",
+                            tagColor(tag),
+                            activeFilters.has(tag)
+                                ? "ring-1 ring-current font-semibold shadow-sm"
+                                : "opacity-70 hover:opacity-100"
+                        )}
+                    >
+                        {tag}
+                    </button>
+                ))}
+            </div>
+            {activeFilters.size > 0 && (
+                <button
+                    onClick={onClear}
+                    className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                >
+                    <X className="w-3 h-3" />Clear
+                </button>
+            )}
+        </div>
+    );
+}
+
 // ─── FunnelPage ───────────────────────────────────────────────────────────────
 
 interface FunnelPageProps {
@@ -86,6 +184,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
     const [sessionToken, setSessionToken] = useState<string | null>(null);
     const [selected, setSelected] = useState<Ingestion | null>(null);
     const [traceSelected, setTraceSelected] = useState<Ingestion | null>(null);
+    const [activeTagFilters, setActiveTagFilters] = useState<Set<string>>(new Set());
     const fileInputRef = useRef<HTMLInputElement>(null);
 
     const fetchIngestions = useCallback(async () => {
@@ -107,6 +206,31 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
     useEffect(() => {
         if (sessionToken !== null) fetchIngestions();
     }, [sessionToken, fetchIngestions]);
+
+    // All unique tags sorted alphabetically
+    const allTags = useMemo(() => {
+        const set = new Set<string>();
+        for (const ing of ingestions) {
+            for (const t of ing.tags ?? []) set.add(t);
+        }
+        return [...set].sort();
+    }, [ingestions]);
+
+    // Filtered list — AND logic: every active filter tag must be present
+    const visibleIngestions = useMemo(() => {
+        if (!activeTagFilters.size) return ingestions;
+        return ingestions.filter((ing) =>
+            [...activeTagFilters].every((t) => ing.tags?.includes(t))
+        );
+    }, [ingestions, activeTagFilters]);
+
+    const toggleTagFilter = (tag: string) => {
+        setActiveTagFilters((prev) => {
+            const next = new Set(prev);
+            next.has(tag) ? next.delete(tag) : next.add(tag);
+            return next;
+        });
+    };
 
     const handleFiles = async (files: FileList | File[]) => {
         const arr = Array.from(files);
@@ -154,6 +278,14 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
         setIngestions((prev) => prev.filter((x) => x.id !== id));
     };
 
+    const handleTagsChange = async (id: string, tags: string[]) => {
+        setIngestions((prev) =>
+            prev.map((ing) => (ing.id === id ? { ...ing, tags } : ing))
+        );
+        if (selected?.id === id) setSelected((prev) => prev ? { ...prev, tags } : prev);
+        await api.updateIngestionTags(id, tags, sessionToken);
+    };
+
     return (
         <div className="w-full mx-auto px-8 py-10 space-y-8 animate-in fade-in duration-500">
             {/* Header */}
@@ -199,6 +331,16 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                 <p className="text-xs text-muted-foreground/60">.txt, .md, .pdf, .docx — up to 20MB</p>
             </div>
 
+            {/* Tag filter bar */}
+            {allTags.length > 0 && (
+                <TagFilterBar
+                    allTags={allTags}
+                    activeFilters={activeTagFilters}
+                    onToggle={toggleTagFilter}
+                    onClear={() => setActiveTagFilters(new Set())}
+                />
+            )}
+
             {/* Table */}
             <div className="rounded-2xl border overflow-hidden">
                 <table className="w-full text-sm">
@@ -220,15 +362,19 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                                     Loading…
                                 </td>
                             </tr>
-                        ) : ingestions.length === 0 ? (
+                        ) : visibleIngestions.length === 0 ? (
                             <tr>
                                 <td colSpan={6} className="text-center py-16 text-muted-foreground">
                                     <FileText className="w-8 h-8 mx-auto mb-3 opacity-30" />
-                                    <p className="text-sm">No ingestions yet — upload a document above.</p>
+                                    <p className="text-sm">
+                                        {activeTagFilters.size > 0
+                                            ? "No documents match the selected tags."
+                                            : "No ingestions yet — upload a document above."}
+                                    </p>
                                 </td>
                             </tr>
                         ) : (
-                            ingestions.map((ing) => (
+                            visibleIngestions.map((ing) => (
                                 <tr
                                     key={ing.id}
                                     onClick={() => setSelected(ing)}
@@ -243,6 +389,11 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                                             ? <div className="text-xs text-violet-500/80 truncate max-w-[220px]">↳ {(ing.extracted as any)?.original_filename ?? "previously processed"}</div>
                                             : ing.file_size && <div className="text-xs text-muted-foreground">{fileSize(ing.file_size)}</div>
                                         }
+                                        <RowTags
+                                            tags={ing.tags ?? []}
+                                            activeFilters={activeTagFilters}
+                                            onToggle={(tag, e) => { e.stopPropagation(); toggleTagFilter(tag); }}
+                                        />
                                     </td>
                                     <td className="px-4 py-3.5"><StatusBadge status={ing.status} /></td>
                                     <td className="px-4 py-3.5">
@@ -292,6 +443,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                 <IngestionDetailModal
                     ingestion={selected}
                     onClose={() => setSelected(null)}
+                    onTagsChange={(tags) => handleTagsChange(selected.id, tags)}
                     onRerun={async () => {
                         await api.rerunIngestion?.(selected.id, sessionToken);
                         await fetchIngestions();

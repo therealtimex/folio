@@ -393,11 +393,11 @@ export class PolicyEngine {
         doc: DocumentObject,
         config: { context?: string | null; fields?: BaselineField[] },
         settings: { llm_provider?: string; llm_model?: string } = {}
-    ): Promise<{ entities: Record<string, unknown>; uncertain_fields: string[] }> {
+    ): Promise<{ entities: Record<string, unknown>; uncertain_fields: string[]; tags: string[] }> {
         const sdk = SDKService.getSDK();
         if (!sdk) {
             logger.warn("SDK unavailable — skipping baseline extraction");
-            return { entities: {}, uncertain_fields: [] };
+            return { entities: {}, uncertain_fields: [], tags: [] };
         }
 
         let fields = (config.fields ?? DEFAULT_BASELINE_FIELDS).filter((f) => f.enabled);
@@ -407,7 +407,7 @@ export class PolicyEngine {
             const suggestedField = DEFAULT_BASELINE_FIELDS.find((f) => f.key === "suggested_filename");
             if (suggestedField) fields = [...fields, suggestedField];
         }
-        if (fields.length === 0) return { entities: {}, uncertain_fields: [] };
+        if (fields.length === 0) return { entities: {}, uncertain_fields: [], tags: [] };
 
         const { provider, model } = await SDKService.resolveChatProvider(settings);
 
@@ -421,9 +421,12 @@ export class PolicyEngine {
 
         const systemPrompt =
             `You are a precise document entity extractor.${contextBlock}\n` +
-            `Return ONLY a valid JSON object with two keys:\n` +
+            `Return ONLY a valid JSON object with three keys:\n` +
             `  "entities": an object containing each requested field (use null for absent fields),\n` +
-            `  "uncertain_fields": an array of field keys you are not confident about.\n` +
+            `  "uncertain_fields": an array of field keys you are not confident about,\n` +
+            `  "tags": an array of 3-6 lowercase semantic labels that best classify this document ` +
+            `(e.g. "invoice", "utility", "tax-deductible", "receipt", "2025", "insurance"). ` +
+            `Include the calendar year if clearly present. Prefer hyphenated multi-word tags.\n` +
             `No markdown, no explanation — only the JSON object.`;
 
         const userPrompt =
@@ -453,14 +456,17 @@ export class PolicyEngine {
             const uncertain_fields: string[] = Array.isArray(parsed.uncertain_fields)
                 ? parsed.uncertain_fields
                 : [];
+            const tags: string[] = Array.isArray(parsed.tags)
+                ? parsed.tags.map((t: unknown) => String(t).toLowerCase().trim()).filter(Boolean)
+                : [];
 
-            logger.info(`Baseline extraction complete — ${Object.keys(entities).length} fields, ${uncertain_fields.length} uncertain`);
-            Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Baseline Extraction", { action: "Baseline extraction complete", fields: Object.keys(entities).length, uncertain: uncertain_fields.length, extracted: entities }, doc.supabase);
-            return { entities, uncertain_fields };
+            logger.info(`Baseline extraction complete — ${Object.keys(entities).length} fields, ${uncertain_fields.length} uncertain, ${tags.length} tags`);
+            Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Baseline Extraction", { action: "Baseline extraction complete", fields: Object.keys(entities).length, uncertain: uncertain_fields.length, tags, extracted: entities }, doc.supabase);
+            return { entities, uncertain_fields, tags };
         } catch (err) {
             logger.error("Baseline extraction failed", { err });
             Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Baseline Extraction", { action: "Baseline extraction failed", error: String(err) }, doc.supabase);
-            return { entities: {}, uncertain_fields: [] };
+            return { entities: {}, uncertain_fields: [], tags: [] };
         }
     }
 

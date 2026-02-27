@@ -395,6 +395,21 @@ class HybridApiClient {
     });
   }
 
+  updateIngestionTags(id: string, tags: string[], token?: string | null) {
+    return this.expressRequest<{ success: boolean; tags: string[] }>(`/api/ingestions/${id}/tags`, {
+      method: "PATCH",
+      auth: Boolean(token), token,
+      body: JSON.stringify({ tags })
+    });
+  }
+
+  summarizeIngestion(id: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; summary: string | null }>(`/api/ingestions/${id}/summarize`, {
+      method: "POST",
+      auth: Boolean(token), token
+    });
+  }
+
   // ─── Baseline Config API ────────────────────────────────────────────────────
 
   getBaselineConfig(token?: string | null) {

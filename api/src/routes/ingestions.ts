@@ -108,6 +108,62 @@ router.post(
     })
 );
 
+// POST /api/ingestions/:id/summarize — generate (or return cached) prose summary
+router.post(
+    "/:id/summarize",
+    asyncHandler(async (req, res) => {
+        if (!req.supabase || !req.user) {
+            res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+        const { data: settingsRow } = await req.supabase
+            .from("user_settings")
+            .select("llm_provider, llm_model")
+            .eq("user_id", req.user.id)
+            .maybeSingle();
+
+        const llmSettings = {
+            llm_provider: settingsRow?.llm_provider ?? undefined,
+            llm_model: settingsRow?.llm_model ?? undefined,
+        };
+
+        const summary = await IngestionService.summarize(
+            req.params["id"] as string,
+            req.supabase,
+            req.user.id,
+            llmSettings
+        );
+        res.json({ success: true, summary });
+    })
+);
+
+// PATCH /api/ingestions/:id/tags — replace tags array (human edits)
+router.patch(
+    "/:id/tags",
+    asyncHandler(async (req, res) => {
+        if (!req.supabase || !req.user) {
+            res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+        const tags: unknown = req.body?.tags;
+        if (!Array.isArray(tags) || tags.some((t) => typeof t !== "string")) {
+            res.status(400).json({ success: false, error: "tags must be an array of strings" });
+            return;
+        }
+        const normalized = (tags as string[]).map((t) => t.toLowerCase().trim()).filter(Boolean);
+        const { error } = await req.supabase
+            .from("ingestions")
+            .update({ tags: normalized })
+            .eq("id", req.params["id"] as string)
+            .eq("user_id", req.user.id);
+        if (error) {
+            res.status(500).json({ success: false, error: error.message });
+            return;
+        }
+        res.json({ success: true, tags: normalized });
+    })
+);
+
 // DELETE /api/ingestions/:id — delete
 router.delete(
     "/:id",
