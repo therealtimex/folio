@@ -82,6 +82,13 @@ export const DEFAULT_BASELINE_FIELDS: BaselineField[] = [
         enabled: true,
         is_default: true,
     },
+    {
+        key: "suggested_filename",
+        type: "string",
+        description: 'A highly descriptive, concise filename for this document using the format: YYYY-MM-DD_Issuer_DocType. Do not include file extensions. If date is missing, omit it.',
+        enabled: true,
+        is_default: true,
+    }
 ];
 
 // ─── Service ──────────────────────────────────────────────────────────────────

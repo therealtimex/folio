@@ -1,60 +1,21 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import fs from "node:fs";
-import path from "path";
 import { createLogger } from "./logger.js";
 import type { ExtractField } from "../services/PolicyLoader.js";
 import { getServiceRoleSupabase } from "../services/supabase.js";
-import { GoogleDriveService } from "../services/GoogleDriveService.js";
+import { ActionHandler, ActionContext } from "./actions/ActionHandler.js";
+import { ActionInput, ExtractedData, deriveVariables } from "./actions/utils.js";
+
+import { RenameAction } from "./actions/RenameAction.js";
+import { AutoRenameAction } from "./actions/AutoRenameAction.js";
+import { CopyAction } from "./actions/CopyAction.js";
+import { CopyToGDriveAction } from "./actions/CopyToGDriveAction.js";
+import { LogCsvAction } from "./actions/LogCsvAction.js";
+import { NotifyAction } from "./actions/NotifyAction.js";
+import { WebhookAction } from "./actions/WebhookAction.js";
 
 const logger = createLogger("Actuator");
 
-type ExtractedData = Record<string, string | number | null>;
-
-// ─── Variable Interpolation ────────────────────────────────────────────────
-
-function interpolate(template: string, vars: Record<string, string>): string {
-    return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? `{${key}}`);
-}
-
-/**
- * Derive computed variables from extracted data using transformer definitions.
- */
-function deriveVariables(
-    data: ExtractedData,
-    fields: ExtractField[]
-): Record<string, string> {
-    const vars: Record<string, string> = {};
-
-    // Populate raw extracted values as strings
-    for (const [k, v] of Object.entries(data)) {
-        if (v != null) vars[k] = String(v);
-    }
-
-    // Run transformers
-    for (const field of fields) {
-        if (!field.transformers) continue;
-        const rawValue = vars[field.key];
-        if (!rawValue) continue;
-
-        for (const t of field.transformers) {
-            try {
-                if (t.name === "get_year") {
-                    vars[t.as] = new Date(rawValue).getFullYear().toString();
-                } else if (t.name === "get_month_name") {
-                    vars[t.as] = new Date(rawValue).toLocaleString("en-US", { month: "long" });
-                } else if (t.name === "get_month") {
-                    vars[t.as] = String(new Date(rawValue).getMonth() + 1).padStart(2, "0");
-                }
-            } catch {
-                logger.warn(`Transformer '${t.name}' failed for key '${field.key}'`);
-            }
-        }
-    }
-
-    return vars;
-}
-
-// ─── Actuator ───────────────────────────────────────────────────────────────
+let warnedMissingServiceRole = false;
 
 export interface ActuatorResult {
     success: boolean;
@@ -63,55 +24,21 @@ export interface ActuatorResult {
     trace: { timestamp: string; step: string; details?: any }[];
 }
 
-type ActionInput = {
-    type: string;
-    config?: Record<string, unknown>;
-    pattern?: string;
-    destination?: string;
-    path?: string;
-    columns?: string[] | string;
-    message?: string;
-    url?: string;
-    payload?: string;
-};
-
-let warnedMissingServiceRole = false;
-
-function pickString(action: ActionInput, key: string): string | undefined {
-    const value = action.config?.[key];
-    if (typeof value === "string" && value.trim().length > 0) {
-        return value;
-    }
-
-    const legacyValue = (action as Record<string, unknown>)[key];
-    if (typeof legacyValue === "string" && legacyValue.trim().length > 0) {
-        return legacyValue;
-    }
-
-    return undefined;
-}
-
-function pickColumns(action: ActionInput, fallback: string[]): string[] {
-    const value = action.config?.columns;
-    if (Array.isArray(value)) {
-        return value.map((item) => String(item).trim()).filter(Boolean);
-    }
-    if (typeof value === "string") {
-        return value.split(",").map((item) => item.trim()).filter(Boolean);
-    }
-
-    const legacyColumns = action.columns;
-    if (Array.isArray(legacyColumns)) {
-        return legacyColumns.map((item) => String(item).trim()).filter(Boolean);
-    }
-    if (typeof legacyColumns === "string") {
-        return legacyColumns.split(",").map((item) => item.trim()).filter(Boolean);
-    }
-
-    return fallback;
-}
-
 export class Actuator {
+    private static handlers: Map<string, ActionHandler> = new Map([
+        ["rename", new RenameAction()],
+        ["auto_rename", new AutoRenameAction()],
+        ["copy", new CopyAction()],
+        ["copy_to_gdrive", new CopyToGDriveAction()],
+        ["log_csv", new LogCsvAction()],
+        ["notify", new NotifyAction()],
+        ["webhook", new WebhookAction()],
+    ]);
+
+    static registerAction(type: string, handler: ActionHandler) {
+        this.handlers.set(type, handler);
+    }
+
     static async logEvent(
         ingestionId: string,
         userId: string,
@@ -163,110 +90,63 @@ export class Actuator {
         result.trace.push({ timestamp: new Date().toISOString(), step: "Initializing Actuator", details: { actionsCount: actions.length } });
         Actuator.logEvent(ingestionId, userId, "info", "Actuator Initialized", { actionsCount: actions.length }, supabase);
 
-        const vars = deriveVariables(data, fields);
-        let currentPath = file.path;
+        // Convert the 13-digit Dropzone timestamp into a human-readable local time
+        // (e.g. "1772148849046-bill.pdf" -> "2026-02-26_15-34-09_bill.pdf")
+        // Note: only `currentFile.name` is normalized; `file.path` (disk path) is unchanged.
+        const tsMatch = file.name.match(/^(\d{13})-(.*)$/);
+        let currentFile = { ...file };
+        if (tsMatch) {
+            const date = new Date(parseInt(tsMatch[1], 10));
+            const yyyy = date.getFullYear();
+            const MM = String(date.getMonth() + 1).padStart(2, "0");
+            const dd = String(date.getDate()).padStart(2, "0");
+            const HH = String(date.getHours()).padStart(2, "0");
+            const mm = String(date.getMinutes()).padStart(2, "0");
+            const ss = String(date.getSeconds()).padStart(2, "0");
+            currentFile.name = `${yyyy}-${MM}-${dd}_${HH}-${mm}-${ss}_${tsMatch[2]}`;
+        }
+
+        const variables = deriveVariables(data, fields);
 
         for (const action of actions) {
+            const handler = this.handlers.get(action.type);
+
+            if (!handler) {
+                const msg = `Action failed: Unsupported action type '${action.type}'`;
+                logger.error(msg);
+                result.errors.push(msg);
+                result.success = false;
+                result.trace.push({ timestamp: new Date().toISOString(), step: `Unsupported action type`, details: { type: action.type } });
+                Actuator.logEvent(ingestionId, userId, "error", "Action Execution", { action: action.type, error: msg }, supabase);
+                continue;
+            }
+
             try {
-                const pattern = pickString(action, "pattern");
-                const destination = pickString(action, "destination");
-                const csvPathTemplate = pickString(action, "path");
-                const messageTemplate = pickString(action, "message");
-                const webhookUrlTemplate = pickString(action, "url");
-                const webhookPayloadTemplate = pickString(action, "payload");
+                const context: ActionContext = {
+                    action: action as any,
+                    data,
+                    file: currentFile,
+                    variables,
+                    userId,
+                    ingestionId,
+                    supabase,
+                };
 
-                if (action.type === "rename" && pattern) {
-                    const ext = path.extname(currentPath);
-                    const dir = path.dirname(currentPath);
-                    let newName = interpolate(pattern, vars);
-                    if (!newName.endsWith(ext)) newName += ext;
-                    const newPath = path.join(dir, newName);
-                    await new Promise<void>((resolve, reject) => {
-                        fs.rename(currentPath, newPath, (err) => {
-                            if (err) reject(err);
-                            else resolve();
-                        });
-                    });
-                    currentPath = newPath;
-                    result.actionsExecuted.push(`Renamed to '${newName}'`);
-                    result.trace.push({ timestamp: new Date().toISOString(), step: `Renamed file to ${newName}`, details: { original: file.name, new: newName } });
-                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "rename", original: file.name, new: newName }, supabase);
-                    file = { ...file, path: newPath, name: newName };
+                const handlerResult = await handler.execute(context);
 
-                    // Update DB so re-runs don't break
-                    const db = supabase ?? getServiceRoleSupabase();
-                    if (db) {
-                        await db.from("ingestions").update({ storage_path: newPath, filename: newName }).eq("id", ingestionId);
+                result.trace.push(...handlerResult.trace);
+
+                if (handlerResult.success) {
+                    if (handlerResult.newFileState) {
+                        currentFile = handlerResult.newFileState;
                     }
-                } else if (action.type === "copy" && destination) {
-                    const destDir = interpolate(destination, vars);
-                    fs.mkdirSync(destDir, { recursive: true });
-
-                    let newName = file.name;
-                    if (pattern) {
-                        newName = interpolate(pattern, vars);
-                        const ext = path.extname(file.name);
-                        if (!newName.endsWith(ext)) newName += ext;
-                    }
-
-                    const newPath = path.join(destDir, newName);
-                    await new Promise<void>((resolve, reject) => {
-                        fs.copyFile(currentPath, newPath, (err) => {
-                            if (err) reject(err);
-                            else resolve();
-                        });
-                    });
-
-                    result.actionsExecuted.push(`Copied to '${newPath}'`);
-                    result.trace.push({ timestamp: new Date().toISOString(), step: `Copied file to ${newPath}`, details: { original: currentPath, copy: newPath } });
-                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "copy", destination: destDir, newName }, supabase);
-
-                } else if (action.type === "copy_to_gdrive") {
-                    const destDirId = destination ? interpolate(destination, vars) : undefined;
-
-                    const uploadResult = await GoogleDriveService.uploadFile(userId, currentPath, destDirId, supabase);
-
-                    if (!uploadResult.success) {
-                        throw new Error(uploadResult.error || "Failed to upload to Google Drive");
-                    }
-
-                    result.actionsExecuted.push(`Copied to Google Drive (ID: ${uploadResult.fileId})`);
-                    result.trace.push({ timestamp: new Date().toISOString(), step: `Copied file to Google Drive`, details: { original: currentPath, driveFileId: uploadResult.fileId, destinationFolderId: destDirId } });
-                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "copy_to_gdrive", destinationFolderId: destDirId ?? null, fileId: uploadResult.fileId }, supabase);
-
-                } else if (action.type === "log_csv" && csvPathTemplate) {
-                    const csvPath = interpolate(csvPathTemplate, vars);
-                    const cols = pickColumns(action, Object.keys(data));
-                    const row = cols.map((c) => vars[c] ?? "").join(",") + "\n";
-                    const header = cols.join(",") + "\n";
-                    if (!fs.existsSync(csvPath)) {
-                        fs.mkdirSync(path.dirname(csvPath), { recursive: true });
-                        fs.writeFileSync(csvPath, header + row, "utf-8");
-                    } else {
-                        fs.appendFileSync(csvPath, row, "utf-8");
-                    }
-                    result.actionsExecuted.push(`Logged CSV → ${csvPath}`);
-                    result.trace.push({ timestamp: new Date().toISOString(), step: "Executed log_csv action", details: { csvPath, cols } });
-                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "log_csv", csvPath, cols }, supabase);
-
-                } else if (action.type === "notify" && messageTemplate) {
-                    const msg = interpolate(messageTemplate, vars);
-                    logger.info(`[NOTIFY] ${msg}`);
-                    result.actionsExecuted.push(`Notified: ${msg}`);
-                    result.trace.push({ timestamp: new Date().toISOString(), step: "Executed notify action", details: { message: msg } });
-                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "notify", message: msg }, supabase);
-
-                } else if (action.type === "webhook" && webhookUrlTemplate && webhookPayloadTemplate) {
-                    const url = interpolate(webhookUrlTemplate, vars);
-                    const payload = JSON.parse(interpolate(webhookPayloadTemplate, vars));
-                    await fetch(url, {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify(payload),
-                    });
-                    result.actionsExecuted.push(`Logged via webhook`);
-                    result.trace.push({ timestamp: new Date().toISOString(), step: `Webhook payload sent to ${url}`, details: { url, payload } });
-                    Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "webhook", url }, supabase);
+                    result.actionsExecuted.push(...handlerResult.logs);
+                } else {
+                    const msg = `Action failed (${action.type}): ${handlerResult.error}`;
+                    logger.error(msg);
+                    result.errors.push(msg);
+                    result.success = false;
+                    Actuator.logEvent(ingestionId, userId, "error", "Action Execution", { action: action.type, error: handlerResult.error }, supabase);
                 }
             } catch (err: unknown) {
                 const errMsg = err instanceof Error ? err.message : String(err);

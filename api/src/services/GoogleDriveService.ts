@@ -33,14 +33,79 @@ function parseCredentials(value: unknown): IntegrationCredentials {
 
 export class GoogleDriveService {
     /**
+     * Walks a slash-separated sub-path under a root Drive folder, creating any
+     * missing folders along the way, and returns the final folder ID.
+     *
+     * e.g. resolveFolderPath(token, "rootId", ["Utilities", "PGE", "Energy Statements"])
+     *      → ID of "Energy Statements" folder (created if absent)
+     */
+    private static async resolveFolderPath(
+        token: string,
+        rootFolderId: string,
+        subSegments: string[]
+    ): Promise<string> {
+        let parentId = rootFolderId;
+
+        for (const segment of subSegments) {
+            const name = segment.trim();
+            if (!name) continue;
+
+            // Search for an existing folder with this name under the current parent.
+            const q = `name='${name.replace(/'/g, "\\'")}' and mimeType='application/vnd.google-apps.folder' and '${parentId}' in parents and trashed=false`;
+            const searchResp = await fetch(
+                `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id)&spaces=drive`,
+                { headers: { Authorization: `Bearer ${token}` } }
+            );
+            if (!searchResp.ok) {
+                throw new Error(`Drive folder search failed: HTTP ${searchResp.status}`);
+            }
+
+            const { files } = await searchResp.json() as { files?: { id: string }[] };
+            if (files && files.length > 0) {
+                parentId = files[0].id;
+            } else {
+                // Folder doesn't exist — create it.
+                const createResp = await fetch("https://www.googleapis.com/drive/v3/files", {
+                    method: "POST",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        name,
+                        mimeType: "application/vnd.google-apps.folder",
+                        parents: [parentId],
+                    }),
+                });
+                if (!createResp.ok) {
+                    throw new Error(`Drive folder creation failed for '${name}': HTTP ${createResp.status}`);
+                }
+                const { id } = await createResp.json() as { id?: string };
+                if (!id) throw new Error(`Folder '${name}' was created but Drive returned no ID.`);
+                logger.info(`Created Drive folder '${name}' (${id}) under parent ${parentId}`);
+                parentId = id;
+            }
+        }
+
+        return parentId;
+    }
+
+    /**
      * Uploads a local file to a user's connected Google Drive.
      * Handles automatic token refreshment if the access_token has expired.
+     *
+     * `folderPath` can be:
+     *   - undefined / empty  → upload to My Drive root
+     *   - a bare folder ID   → upload directly into that folder
+     *   - "rootId/Sub/Path"  → resolve (and auto-create) the subfolder hierarchy,
+     *                          then upload into the deepest folder
      */
     static async uploadFile(
         userId: string,
         localFilePath: string,
         folderId?: string,
-        supabaseClient?: SupabaseClient | null
+        supabaseClient?: SupabaseClient | null,
+        fileName?: string
     ): Promise<UploadResult> {
         logger.info(`Initiating Google Drive upload for user ${userId}: ${localFilePath}`);
         const supabase = supabaseClient ?? getServiceRoleSupabase();
@@ -81,14 +146,76 @@ export class GoogleDriveService {
             return { success: false, error: "Google Drive credentials are incomplete. Please reconnect the drive." };
         }
 
-        // 2. Refresh Token if needed (optimistic upload, catch 401)
+        // 2. Proactively refresh the token if it is expired or expires within 60 s.
+        // This must happen before any Drive API calls (folder resolution, upload initiation).
+        const tokenIsStale = credentials.expires_at && Date.now() >= credentials.expires_at - 60_000;
+        if (tokenIsStale && refreshToken && clientId && clientSecret) {
+            logger.info("Google Drive token is stale, refreshing before Drive API calls...");
+            try {
+                const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: new URLSearchParams({
+                        client_id: clientId,
+                        client_secret: clientSecret,
+                        refresh_token: refreshToken,
+                        grant_type: "refresh_token",
+                    }),
+                });
+                if (!tokenResp.ok) {
+                    return { success: false, error: "Google Drive authentication expired and could not be refreshed. Please reconnect the drive." };
+                }
+                const tokenData = await tokenResp.json();
+                if (!tokenData?.access_token) {
+                    return { success: false, error: "Google OAuth token response was invalid." };
+                }
+                accessToken = tokenData.access_token as string;
+                const updatedCredentials: IntegrationCredentials = {
+                    ...credentials,
+                    access_token: accessToken,
+                    ...(typeof tokenData.refresh_token === "string" && tokenData.refresh_token
+                        ? { refresh_token: tokenData.refresh_token }
+                        : {}),
+                    ...(typeof tokenData.expires_in === "number"
+                        ? { expires_at: Date.now() + tokenData.expires_in * 1000 }
+                        : {}),
+                };
+                await supabase.from("integrations").update({
+                    credentials: updatedCredentials,
+                    updated_at: new Date().toISOString(),
+                }).eq("id", integration.id);
+            } catch (refreshErr) {
+                logger.error("Proactive token refresh failed", { error: refreshErr });
+                return { success: false, error: "Failed to communicate with Google Auth server." };
+            }
+        }
+
+        // 3. Resolve subfolder path (auto-creates missing folders).
+        // folderPath may be "rootId", "rootId/Sub/Folder", or undefined.
+        // Drive folder IDs are stable across token refreshes so we resolve once.
+        let resolvedFolderId: string | undefined;
+        if (folderId && folderId.trim().length > 0) {
+            const parts = folderId.trim().split("/");
+            const rootId = parts[0];
+            const subSegments = parts.slice(1);
+            try {
+                resolvedFolderId = subSegments.length > 0
+                    ? await GoogleDriveService.resolveFolderPath(accessToken, rootId, subSegments)
+                    : rootId;
+            } catch (pathErr) {
+                const msg = pathErr instanceof Error ? pathErr.message : String(pathErr);
+                return { success: false, error: `Failed to resolve Drive folder path: ${msg}` };
+            }
+        }
+
+        // 4. Perform upload (optimistic; catches 401 as a last-resort fallback).
         const performUpload = async (token: string): Promise<Response> => {
-            const fileName = path.basename(localFilePath);
+            const resolvedFileName = fileName ?? path.basename(localFilePath);
             const mimeType = "application/octet-stream";
 
-            const metadata: Record<string, unknown> = { name: fileName };
-            if (folderId && folderId.trim().length > 0) {
-                metadata.parents = [folderId.trim()];
+            const metadata: Record<string, unknown> = { name: resolvedFileName };
+            if (resolvedFolderId) {
+                metadata.parents = [resolvedFolderId];
             }
 
             // Resumable upload avoids buffering/base64 encoding the full file in memory.
@@ -133,7 +260,7 @@ export class GoogleDriveService {
 
         let response = await performUpload(accessToken);
 
-        // 3. Handle Token Expiry
+        // 5. Handle Token Expiry (last-resort retry if upload still returns 401)
         if (response.status === 401 && refreshToken && clientId && clientSecret) {
             logger.info("Google Drive token expired, attempting refresh...");
             try {

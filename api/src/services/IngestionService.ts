@@ -175,9 +175,9 @@ export class IngestionService {
                 // 5. Stage 2: Policy matching + policy-specific field extraction
                 let result;
                 if (userPolicies.length > 0) {
-                    result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings);
+                    result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings, baselineEntities);
                 } else {
-                    result = await PolicyEngine.process(enrichedDoc, llmSettings);
+                    result = await PolicyEngine.process(enrichedDoc, llmSettings, baselineEntities);
                 }
 
                 const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
@@ -320,9 +320,9 @@ export class IngestionService {
 
             let result;
             if (userPolicies.length > 0) {
-                result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings);
+                result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings, baselineEntities);
             } else {
-                result = await PolicyEngine.process(enrichedDoc, llmSettings);
+                result = await PolicyEngine.process(enrichedDoc, llmSettings, baselineEntities);
             }
 
             const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;

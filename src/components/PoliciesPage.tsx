@@ -117,7 +117,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
         description: "",
         keywords: "",
         matchStrategy: "ANY" as "ANY" | "ALL",
-        actions: [{ type: "copy" as "copy" | "rename" | "log_csv" | "copy_to_gdrive", destination: "" }],
+        actions: [{ type: "copy" as "copy" | "rename" | "auto_rename" | "log_csv" | "copy_to_gdrive", destination: "", filename: "" }],
         tags: "",
         priority: 100,
     });
@@ -282,7 +282,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
         toast.success("Policies reloaded.");
     };
 
-    const updateQuickAction = (index: number, field: "type" | "destination", value: string) => {
+    const updateQuickAction = (index: number, field: "type" | "destination" | "filename", value: string) => {
         setQuickForm((prev) => {
             const actions = prev.actions.map((a, i) =>
                 i === index ? { ...a, [field]: value } : a
@@ -294,7 +294,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
     const addQuickAction = () => {
         setQuickForm((prev) => ({
             ...prev,
-            actions: [...prev.actions, { type: "copy" as const, destination: "" }],
+            actions: [...prev.actions, { type: "copy" as const, destination: "", filename: "" }],
         }));
     };
 
@@ -314,15 +314,21 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             const tags = quickForm.tags.split(",").map((t) => t.trim()).filter(Boolean);
 
             const builtActions: PolicyAction[] = quickForm.actions
-                .filter((a) => a.type === "copy_to_gdrive" || a.destination.trim())
+                .filter((a) => a.type === "copy_to_gdrive" || a.type === "auto_rename" || a.destination.trim())
                 .map((a) => {
                     const action: PolicyAction = { type: a.type };
-                    if (a.type === "copy" || a.type === "rename") {
+                    if (a.type === "copy") {
                         action.destination = a.destination;
+                        if (a.filename) action.filename = a.filename;
+                    } else if (a.type === "rename") {
+                        action.destination = a.destination;
+                    } else if (a.type === "auto_rename") {
+                        // no destination needed, AI derives it
                     } else if (a.type === "copy_to_gdrive") {
                         if (a.destination.trim()) {
                             action.destination = a.destination.trim();
                         }
+                        if (a.filename) action.filename = a.filename;
                     } else if (a.type === "log_csv") {
                         action.path = a.destination;
                     }
@@ -353,7 +359,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             await api.savePolicy?.(policy, sessionToken);
             toast.success(`Policy "${policy.metadata.name}" created.`);
             setShowQuickCreate(false);
-            setQuickForm({ name: "", description: "", keywords: "", matchStrategy: "ANY", actions: [{ type: "copy", destination: "" }], tags: "", priority: 100 });
+            setQuickForm({ name: "", description: "", keywords: "", matchStrategy: "ANY", actions: [{ type: "copy", destination: "", filename: "" }], tags: "", priority: 100 });
             await fetchPolicies();
         } catch {
             toast.error("Failed to create policy.");
@@ -596,35 +602,67 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                             </button>
                                         </div>
                                         <div className="space-y-2">
-                                            {quickForm.actions.map((action, i) => (
-                                                <div key={i} className="flex gap-2 items-center">
-                                                    <select
-                                                        value={action.type}
-                                                        onChange={(e) => updateQuickAction(i, "type", e.target.value)}
-                                                        className="h-8 text-xs rounded-xl border border-border/40 bg-background px-2 text-foreground w-36 shrink-0"
-                                                    >
-                                                        <option value="copy">Copy to folder</option>
-                                                        <option value="rename">Rename file</option>
-                                                        <option value="log_csv">Log to CSV</option>
-                                                        <option value="copy_to_gdrive">Copy to Google Drive</option>
-                                                    </select>
-                                                    <Input
-                                                        placeholder={action.type === "copy" ? "/Car/" : action.type === "copy_to_gdrive" ? "Folder ID (empty = My Drive root)" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
-                                                        value={action.destination}
-                                                        onChange={(e) => updateQuickAction(i, "destination", e.target.value)}
-                                                        className="h-8 text-xs rounded-xl border-border/40 bg-background font-mono flex-1"
-                                                    />
-                                                    {quickForm.actions.length > 1 && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => removeQuickAction(i)}
-                                                            className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-1"
-                                                        >
-                                                            <X className="w-3.5 h-3.5" />
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            ))}
+                                            {quickForm.actions.map((action, i) => {
+                                                const filenameMode = !action.filename || action.filename === "" ? "original" : action.filename === "auto" ? "auto" : "custom";
+                                                return (
+                                                    <div key={i} className="space-y-1.5">
+                                                        <div className="flex gap-2 items-center">
+                                                            <select
+                                                                value={action.type}
+                                                                onChange={(e) => updateQuickAction(i, "type", e.target.value)}
+                                                                className="h-8 text-xs rounded-xl border border-border/40 bg-background px-2 text-foreground w-36 shrink-0"
+                                                            >
+                                                                <option value="copy">Copy to folder</option>
+                                                                <option value="rename">Rename file (Pattern)</option>
+                                                                <option value="log_csv">Log to CSV</option>
+                                                                <option value="copy_to_gdrive">Copy to Google Drive</option>
+                                                            </select>
+                                                            <Input
+                                                                placeholder={action.type === "copy" ? "/Car/" : action.type === "copy_to_gdrive" ? "Folder ID (empty = My Drive root)" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
+                                                                value={action.destination}
+                                                                onChange={(e) => updateQuickAction(i, "destination", e.target.value)}
+                                                                className="h-8 text-xs rounded-xl border-border/40 bg-background font-mono flex-1"
+                                                            />
+                                                            {quickForm.actions.length > 1 && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => removeQuickAction(i)}
+                                                                    className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-1"
+                                                                >
+                                                                    <X className="w-3.5 h-3.5" />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                        {(action.type === "copy" || action.type === "copy_to_gdrive") && (
+                                                            <div className="flex gap-2 items-center pl-[152px]">
+                                                                <span className="text-[10px] text-muted-foreground shrink-0">Filename:</span>
+                                                                <select
+                                                                    value={filenameMode}
+                                                                    onChange={(e) => {
+                                                                        const mode = e.target.value;
+                                                                        if (mode === "original") updateQuickAction(i, "filename", "");
+                                                                        else if (mode === "auto") updateQuickAction(i, "filename", "auto");
+                                                                        else updateQuickAction(i, "filename", "{date}_{issuer}_{document_type}");
+                                                                    }}
+                                                                    className="h-7 text-xs rounded-lg border border-border/40 bg-background px-2 text-foreground shrink-0"
+                                                                >
+                                                                    <option value="original">Keep original</option>
+                                                                    <option value="auto">Smart rename (AI)</option>
+                                                                    <option value="custom">Custom pattern</option>
+                                                                </select>
+                                                                {filenameMode === "custom" && (
+                                                                    <Input
+                                                                        value={action.filename}
+                                                                        onChange={(e) => updateQuickAction(i, "filename", e.target.value)}
+                                                                        placeholder="{date}_{issuer}_{document_type}"
+                                                                        className="h-7 text-xs rounded-lg border-border/40 bg-background font-mono flex-1"
+                                                                    />
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
                                         </div>
                                     </div>
 

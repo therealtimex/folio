@@ -25,12 +25,13 @@ export interface ExtractField {
     transformers?: { name: string; as: string }[];
 }
 
-export type ActionType = "rename" | "copy" | "copy_to_gdrive" | "log_csv" | "notify" | "webhook";
+export type ActionType = "rename" | "auto_rename" | "copy" | "copy_to_gdrive" | "log_csv" | "notify" | "webhook";
 
 export interface PolicyAction {
     type: ActionType;
     pattern?: string;
     destination?: string;
+    filename?: string;
     path?: string;
     columns?: string[];
     message?: string;

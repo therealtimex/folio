@@ -223,7 +223,7 @@ export class PolicyEngine {
      * Run a document through the policy pipeline.
      * Returns the first matched policy result, or the fallback.
      */
-    static async process(doc: DocumentObject, settings: { llm_provider?: string; llm_model?: string } = {}): Promise<ProcessingResult> {
+    static async process(doc: DocumentObject, settings: { llm_provider?: string; llm_model?: string } = {}, baselineEntities: Record<string, unknown> = {}): Promise<ProcessingResult> {
         logger.info(`Processing document: ${doc.filePath}`);
         const policies = await PolicyLoader.load();
         const globalTrace: TraceLog[] = [{ timestamp: new Date().toISOString(), step: "Loaded policies", details: { count: policies.length } }];
@@ -260,11 +260,13 @@ export class PolicyEngine {
                 }
 
                 // Execute actions
+                // Merge baseline entities (lower priority) with policy-specific extracted data
+                // so actions like auto_rename have access to suggested_filename from baseline.
                 const actuatorResult = await Actuator.execute(
                     doc.ingestionId,
                     doc.userId,
                     policy.spec.actions ?? [],
-                    extractedData,
+                    { ...baselineEntities, ...extractedData } as Record<string, string | number | null>,
                     { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
                     policy.spec.extract ?? [],
                     doc.supabase
@@ -306,7 +308,7 @@ export class PolicyEngine {
      * Same as process() but uses a pre-loaded list of policies.
      * Used by IngestionService so user-scoped policies are evaluated.
      */
-    static async processWithPolicies(doc: DocumentObject, policies: FolioPolicy[], settings: { llm_provider?: string; llm_model?: string } = {}): Promise<ProcessingResult> {
+    static async processWithPolicies(doc: DocumentObject, policies: FolioPolicy[], settings: { llm_provider?: string; llm_model?: string } = {}, baselineEntities: Record<string, unknown> = {}): Promise<ProcessingResult> {
         logger.info(`Processing document with ${policies.length} policies: ${doc.filePath}`);
         const globalTrace: TraceLog[] = [{ timestamp: new Date().toISOString(), step: "Loaded user policies", details: { count: policies.length } }];
         Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "Loaded user policies", count: policies.length }, doc.supabase);
@@ -341,7 +343,7 @@ export class PolicyEngine {
                     doc.ingestionId,
                     doc.userId,
                     policy.spec.actions ?? [],
-                    extractedData,
+                    { ...baselineEntities, ...extractedData } as Record<string, string | number | null>,
                     { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
                     policy.spec.extract ?? [],
                     doc.supabase
@@ -398,7 +400,13 @@ export class PolicyEngine {
             return { entities: {}, uncertain_fields: [] };
         }
 
-        const fields = (config.fields ?? DEFAULT_BASELINE_FIELDS).filter((f) => f.enabled);
+        let fields = (config.fields ?? DEFAULT_BASELINE_FIELDS).filter((f) => f.enabled);
+        // Always include suggested_filename so auto_rename actions have an AI-generated name
+        // even when the user's saved baseline config predates this field.
+        if (!fields.some((f) => f.key === "suggested_filename")) {
+            const suggestedField = DEFAULT_BASELINE_FIELDS.find((f) => f.key === "suggested_filename");
+            if (suggestedField) fields = [...fields, suggestedField];
+        }
         if (fields.length === 0) return { entities: {}, uncertain_fields: [] };
 
         const { provider, model } = await SDKService.resolveChatProvider(settings);
