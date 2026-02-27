@@ -55,7 +55,7 @@ function isPdfTextExtractable(pdfData: {
     return true;
 }
 
-export type IngestionStatus = "pending" | "processing" | "matched" | "no_match" | "error";
+export type IngestionStatus = "pending" | "processing" | "matched" | "no_match" | "error" | "duplicate";
 export type IngestionSource = "upload" | "dropzone" | "email" | "url";
 
 export interface Ingestion {
@@ -65,6 +65,7 @@ export interface Ingestion {
     filename: string;
     mime_type?: string;
     file_size?: number;
+    file_hash?: string;
     status: IngestionStatus;
     policy_id?: string;
     policy_name?: string;
@@ -90,8 +91,42 @@ export class IngestionService {
         source?: IngestionSource;
         filePath: string;
         content: string;
+        fileHash?: string;
     }): Promise<Ingestion> {
-        const { supabase, userId, filename, mimeType, fileSize, source = "upload", filePath, content } = opts;
+        const { supabase, userId, filename, mimeType, fileSize, source = "upload", filePath, content, fileHash } = opts;
+
+        // Duplicate detection — check if this exact file content was already ingested
+        if (fileHash) {
+            const { data: existing } = await supabase
+                .from("ingestions")
+                .select("id, filename, created_at")
+                .eq("user_id", userId)
+                .eq("file_hash", fileHash)
+                .eq("status", "matched")
+                .order("created_at", { ascending: true })
+                .limit(1)
+                .maybeSingle();
+
+            if (existing) {
+                logger.info(`Duplicate file detected: '${filename}' matches ingestion ${existing.id} ('${existing.filename}')`);
+                const { data: dupIngestion } = await supabase
+                    .from("ingestions")
+                    .insert({
+                        user_id: userId,
+                        source,
+                        filename,
+                        mime_type: mimeType,
+                        file_size: fileSize,
+                        storage_path: filePath,
+                        file_hash: fileHash,
+                        status: "duplicate",
+                        extracted: { duplicate_of: existing.id, original_filename: existing.filename },
+                    })
+                    .select()
+                    .single();
+                return dupIngestion as Ingestion;
+            }
+        }
 
         // 1. Insert into ingestions
         const { data: ingestion, error: insertErr } = await supabase
@@ -103,6 +138,7 @@ export class IngestionService {
                 mime_type: mimeType,
                 file_size: fileSize,
                 storage_path: filePath,
+                file_hash: fileHash ?? null,
                 status: "processing"
             })
             .select()

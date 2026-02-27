@@ -11,7 +11,8 @@ import {
     Loader2,
     FileText,
     ChevronRight,
-    Terminal
+    Terminal,
+    Copy
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
@@ -30,7 +31,7 @@ export interface Ingestion {
     filename: string;
     mime_type?: string;
     file_size?: number;
-    status: "pending" | "processing" | "matched" | "no_match" | "error";
+    status: "pending" | "processing" | "matched" | "no_match" | "error" | "duplicate";
     policy_id?: string;
     policy_name?: string;
     extracted?: Record<string, unknown>;
@@ -49,6 +50,7 @@ function StatusBadge({ status }: { status: Ingestion["status"] }) {
         matched: { label: "Matched", icon: <CheckCircle2 className="w-3 h-3" />, cls: "bg-emerald-500/10 text-emerald-500" },
         no_match: { label: "No Match", icon: <Minus className="w-3 h-3" />, cls: "bg-amber-500/10 text-amber-600" },
         error: { label: "Error", icon: <XCircle className="w-3 h-3" />, cls: "bg-destructive/10 text-destructive" },
+        duplicate: { label: "Duplicate", icon: <Copy className="w-3 h-3" />, cls: "bg-violet-500/10 text-violet-500" },
     };
     const s = map[status] ?? map.pending;
     return (
@@ -115,7 +117,12 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                 toast.info(`Ingesting ${file.name}…`);
                 const result = await api.uploadDocument?.(file, sessionToken);
                 if (result?.success) {
-                    toast.success(`${file.name} → ${result.ingestion?.status}`);
+                    if (result.ingestion?.status === "duplicate") {
+                        const orig = (result.ingestion.extracted as any)?.original_filename ?? "a previous upload";
+                        toast.warning(`${file.name} is a duplicate of "${orig}" — skipped.`);
+                    } else {
+                        toast.success(`${file.name} → ${result.ingestion?.status}`);
+                    }
                 } else {
                     toast.error(`Failed to ingest ${file.name}`);
                 }
@@ -232,7 +239,10 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                                 >
                                     <td className="px-5 py-3.5">
                                         <div className="font-medium text-sm truncate max-w-[220px]" title={ing.filename}>{ing.filename}</div>
-                                        {ing.file_size && <div className="text-xs text-muted-foreground">{fileSize(ing.file_size)}</div>}
+                                        {ing.status === "duplicate"
+                                            ? <div className="text-xs text-violet-500/80 truncate max-w-[220px]">↳ {(ing.extracted as any)?.original_filename ?? "previously processed"}</div>
+                                            : ing.file_size && <div className="text-xs text-muted-foreground">{fileSize(ing.file_size)}</div>
+                                        }
                                     </td>
                                     <td className="px-4 py-3.5"><StatusBadge status={ing.status} /></td>
                                     <td className="px-4 py-3.5">

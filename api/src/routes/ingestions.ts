@@ -3,6 +3,7 @@ import multer from "multer";
 import os from "os";
 import path from "path";
 import fs from "fs/promises";
+import crypto from "crypto";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { optionalAuth } from "../middleware/auth.js";
 import { IngestionService } from "../services/IngestionService.js";
@@ -67,6 +68,9 @@ router.post(
         const dropzoneDir = settings?.storage_path || path.join(os.homedir(), ".realtimex", "folio", "dropzone");
         await fs.mkdir(dropzoneDir, { recursive: true });
 
+        // Compute SHA-256 hash before writing — used for deduplication
+        const fileHash = crypto.createHash("sha256").update(file.buffer).digest("hex");
+
         // Save physical file
         const safeFilename = `${Date.now()}-${file.originalname.replace(/[^a-zA-Z0-9.-]/g, "_")}`;
         const filePath = path.join(dropzoneDir, safeFilename);
@@ -83,7 +87,8 @@ router.post(
             fileSize: file.size,
             source: "upload",
             filePath,
-            content // Keeping content for local PolicyEngine fallback
+            content,
+            fileHash,
         });
 
         res.status(201).json({ success: true, ingestion });
