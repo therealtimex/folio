@@ -28,6 +28,7 @@ function StatusIcon({ status }: { status: Ingestion["status"] }) {
         processing: <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />,
         matched: <CheckCircle2 className="w-4 h-4 text-emerald-500" />,
         no_match: <Minus className="w-4 h-4 text-amber-500" />,
+        duplicate: <Minus className="w-4 h-4 text-emerald-500" />,
         error: <XCircle className="w-4 h-4 text-destructive" />,
     };
     return map[status] ?? null;

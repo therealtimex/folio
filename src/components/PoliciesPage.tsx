@@ -43,6 +43,7 @@ interface PolicyAction {
     type: string;
     destination?: string;
     pattern?: string;
+    filename?: string;
     path?: string;
     columns?: string[];
 }

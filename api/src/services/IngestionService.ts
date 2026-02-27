@@ -6,6 +6,7 @@ import { PolicyLoader } from "./PolicyLoader.js";
 import { PolicyEngine } from "./PolicyEngine.js";
 import { BaselineConfigService } from "./BaselineConfigService.js";
 import { Actuator } from "../utils/Actuator.js";
+import { RAGService } from "./RAGService.js";
 
 const logger = createLogger("IngestionService");
 
@@ -182,14 +183,23 @@ export class IngestionService {
                 // 3. Fast Path — fetch all dependencies in parallel
                 const [userPolicies, settingsRow, baselineConfig] = await Promise.all([
                     PolicyLoader.load(false, supabase),
-                    supabase.from("user_settings").select("llm_provider, llm_model").eq("user_id", userId).maybeSingle(),
+                    supabase.from("user_settings").select("llm_provider, llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
                     BaselineConfigService.getActive(supabase, userId),
                 ]);
                 const llmSettings = {
                     llm_provider: settingsRow.data?.llm_provider ?? undefined,
                     llm_model: settingsRow.data?.llm_model ?? undefined,
                 };
+                const embedSettings = {
+                    embedding_provider: settingsRow.data?.embedding_provider ?? undefined,
+                    embedding_model: settingsRow.data?.embedding_model ?? undefined,
+                };
                 const doc = { filePath: filePath, text: extractionContent, ingestionId: ingestion.id, userId, supabase };
+
+                // Fire and forget Semantic Embedding Storage
+                RAGService.chunkAndEmbed(ingestion.id, userId, doc.text, supabase, embedSettings).catch(err => {
+                    logger.error(`RAG embedding failed for ${ingestion.id}`, err);
+                });
 
                 // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
                 const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
@@ -332,14 +342,23 @@ export class IngestionService {
         if (isFastPath) {
             const [userPolicies, settingsRow, baselineConfig] = await Promise.all([
                 PolicyLoader.load(false, supabase),
-                supabase.from("user_settings").select("llm_provider, llm_model").eq("user_id", userId).maybeSingle(),
+                supabase.from("user_settings").select("llm_provider, llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
                 BaselineConfigService.getActive(supabase, userId),
             ]);
             const llmSettings = {
                 llm_provider: settingsRow.data?.llm_provider ?? undefined,
                 llm_model: settingsRow.data?.llm_model ?? undefined,
             };
+            const embedSettings = {
+                embedding_provider: settingsRow.data?.embedding_provider ?? undefined,
+                embedding_model: settingsRow.data?.embedding_model ?? undefined,
+            };
             const doc = { filePath, text: extractionContent, ingestionId, userId, supabase };
+
+            // Fire and forget Semantic Embedding Storage for re-runs
+            RAGService.chunkAndEmbed(ingestionId, userId, doc.text, supabase, embedSettings).catch(err => {
+                logger.error(`RAG embedding failed during rerun for ${ingestionId}`, err);
+            });
 
             const { entities: baselineEntities } = await PolicyEngine.extractBaseline(
                 doc,
