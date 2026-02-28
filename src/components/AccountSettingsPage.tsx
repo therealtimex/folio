@@ -26,14 +26,14 @@ import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { AuthPanel } from "./AuthPanel";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils";
-import { Profile } from "../lib/types";
+import { Profile, SupabaseConfig } from "../lib/types";
 
 interface AccountSettingsPageProps {
     supabase: SupabaseClient | null;
     sessionEmail: string | null;
     sessionStatus: "unknown" | "authenticated" | "anonymous" | "error";
     initStatus: "unknown" | "initialized" | "empty" | "missing_view" | "error";
-    configSnapshot: Record<string, unknown>;
+    configSnapshot: SupabaseConfig | null;
     configSource: string;
     onRefresh: () => void;
     onLaunchSetup: () => void;
@@ -479,7 +479,7 @@ function SupabaseSection({
     onLaunchSetup,
     onResetSetup
 }: {
-    configSnapshot: Record<string, unknown>;
+    configSnapshot: SupabaseConfig | null;
     configSource: string;
     onLaunchSetup: () => void;
     onResetSetup: () => void;
