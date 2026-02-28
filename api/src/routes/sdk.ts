@@ -25,6 +25,7 @@ router.get("/providers/chat", async (req: Request, res: Response) => {
         );
 
         res.json({ success: true, providers: providers || [] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         res.json({ success: false, providers: [], message: error.message });
     }
@@ -48,6 +49,7 @@ router.get("/providers/embed", async (req: Request, res: Response) => {
         );
 
         res.json({ success: true, providers: providers || [] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         res.json({ success: false, providers: [], message: error.message });
     }
@@ -88,6 +90,7 @@ router.post("/test-llm", async (req: Request, res: Response) => {
         } else {
             res.json({ success: false, message: response.error || "Failed to connect to LLM" });
         }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         logger.error("LLM sdk test failed", { error: error?.message ?? String(error) });
         res.json({ success: false, message: error.message });

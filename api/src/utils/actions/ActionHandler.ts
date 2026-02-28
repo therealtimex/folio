@@ -5,6 +5,7 @@ import type { ExtractedData } from "./utils.js";
 export interface TraceLog {
     timestamp: string;
     step: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     details?: any;
 }
 

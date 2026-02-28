@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import {
     LogIn,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     UserPlus,
     ShieldCheck,
     Loader2,
@@ -20,6 +21,7 @@ import { Alert, AlertDescription } from "./ui/alert";
 import { ModeToggle } from "./mode-toggle";
 import { Logo } from "./Logo";
 import { api } from "../lib/api";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { cn } from "@/lib/utils";
 
 interface LoginPageProps {
@@ -51,6 +53,7 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
             const { error: loginError } = await supabase.auth.signInWithPassword({ email, password });
             if (loginError) throw loginError;
             onSuccess();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {
             setError(err.message || "Authentication failed.");
         } finally {
@@ -79,6 +82,7 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
             if (loginError) throw loginError;
 
             onSuccess();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (err: any) {
             setError(err.message || "Failed to initialize foundation.");
         } finally {

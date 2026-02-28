@@ -70,6 +70,7 @@ const CACHE_TTL_MS = 30_000;
 
 // ─── Row → Policy ────────────────────────────────────────────────────────────
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function rowToPolicy(row: any): FolioPolicy {
     return {
         apiVersion: row.api_version ?? "folio/v1",

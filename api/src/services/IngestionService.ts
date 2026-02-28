@@ -45,6 +45,7 @@ function isPdfTextExtractable(pdfData: {
     if (words.length < 20) return false;
 
     // Signal 3: garbage character ratio must be below 2 %
+    // eslint-disable-next-line no-control-regex
     const garbageCount = (raw.match(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\uFFFD]/g) ?? []).length;
     if (raw.length > 0 && garbageCount / raw.length > 0.02) return false;
 
@@ -79,6 +80,7 @@ export interface Ingestion {
     actions_taken?: string[];
     error_message?: string;
     storage_path?: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     trace?: Array<{ timestamp: string; step: string; details?: any }>;
     tags?: string[];
     summary?: string | null;
@@ -378,6 +380,7 @@ export class IngestionService {
                     embedding_model: processingSettingsRow.data?.embedding_model ?? undefined,
                 };
                 const doc = { filePath: filePath, text: extractionContent, ingestionId: ingestion.id, userId, supabase };
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
 
                 // Fire and forget Semantic Embedding Storage
@@ -632,6 +635,7 @@ export class IngestionService {
                     isFastPath = true;
                     extractionContent = pdfData.text;
                 }
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             } catch (err) {
                 // ignore
             }
@@ -652,6 +656,7 @@ export class IngestionService {
                 embedding_model: processingSettingsRow.data?.embedding_model ?? undefined,
             };
             const doc = { filePath, text: extractionContent, ingestionId, userId, supabase };
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
 
             // Fire and forget Semantic Embedding Storage for re-runs

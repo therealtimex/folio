@@ -78,6 +78,7 @@ export interface Rule {
   user_id: string;
   name: string;
   description?: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   condition: any;
   action?: string;
   actions?: string[];

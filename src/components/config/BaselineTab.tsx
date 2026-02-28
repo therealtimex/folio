@@ -13,6 +13,7 @@ import type { BaselineField, BaselineConfig } from '../../lib/types';
 function apiErrMsg(err: unknown, fallback: string): string {
     if (!err) return fallback;
     if (typeof err === 'string') return err;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     if (typeof err === 'object' && 'message' in (err as any)) return (err as any).message;
     return fallback;
 }

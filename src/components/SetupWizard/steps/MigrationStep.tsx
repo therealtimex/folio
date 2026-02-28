@@ -5,7 +5,9 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
 import { Alert, AlertDescription } from "../../ui/alert";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { Database, Key, Loader2, Play, ChevronRight, AlertCircle } from "lucide-react";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { cn } from "@/lib/utils";
 
 interface MigrationStepProps {

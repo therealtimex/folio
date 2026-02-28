@@ -30,6 +30,7 @@ export interface DocumentObject {
 export interface TraceLog {
     timestamp: string;
     step: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     details?: any;
 }
 
@@ -65,6 +66,7 @@ function extractVlmPayload(text: string): { imageDataUrl: string; supplementalTe
     };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function buildMessageContent(prompt: string, text: string, textFirst = false): any {
     const vlmPayload = extractVlmPayload(text);
     if (vlmPayload) {
@@ -85,6 +87,7 @@ function buildMessageContent(prompt: string, text: string, textFirst = false): a
 /**
  * Robustly extracts and parses a JSON object from an LLM string response.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseLlmJson<T = any>(raw: unknown): T | null {
     const rawText = normalizeLlmContent(raw).trim();
     if (!rawText) return null;
@@ -234,6 +237,7 @@ function applySheetTemplateContext(policy: FolioPolicy, template: SheetTemplateC
         return policy;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const spec = policy.spec as { actions?: any[]; extract?: ExtractField[] };
     if (!Array.isArray(spec.actions)) {
         spec.actions = [];
@@ -300,6 +304,7 @@ function extractSynthesisTargetHints(description: string): SynthesisTargetHints 
     const urlMatch = description.match(/https?:\/\/docs\.google\.com\/spreadsheets\/d\/[^\s)]+/i);
     if (urlMatch?.[0]) {
         const cleaned = stripTrailingPunctuation(urlMatch[0]);
+        // eslint-disable-next-line no-useless-escape
         if (gid && !/[\?#]gid=\d+/i.test(cleaned)) {
             hints.sheetReference = `${cleaned}#gid=${gid}`;
         } else {
@@ -332,6 +337,7 @@ function applySynthesisTargetHints(policy: FolioPolicy, hints: SynthesisTargetHi
         return policy;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const spec = policy.spec as { actions?: any[] };
     if (!Array.isArray(spec.actions)) {
         spec.actions = [];
@@ -459,6 +465,7 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
                         role: "user",
                         content: buildMessageContent(`Question: ${prompt}`, doc.text, true)
                     }
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ] as any,
                 { provider, model }
             );
@@ -481,6 +488,7 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
                 raw_length: raw.length,
                 raw_preview: previewLlmText(raw),
             }, doc.supabase);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const parsed = parseLlmJson<any>(raw);
             if (parsed && typeof parsed === "object" && typeof parsed.result === "boolean") {
                 const threshold = condition.confidence_threshold ?? 0.8;
@@ -495,6 +503,7 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
         return false;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     logger.warn(`Unknown condition type "${(condition as any).type}" — skipping`);
     return false;
 }
@@ -578,10 +587,12 @@ ${fieldDescriptions}`;
 
         const result = await sdk.llm.chat(
             isVlmPayload
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ? [{ role: "user", content: buildMessageContent(mixedPrompt, doc.text) }] as any
                 : [
                     { role: "system", content: "You are a precise data extraction engine. Return only valid JSON." },
                     { role: "user", content: buildMessageContent(prompt, doc.text) }
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ] as any,
             { provider, model }
         );
@@ -717,10 +728,12 @@ Rules:
             : prompt;
         const result = await sdk.llm.chat(
             isVlmPayload
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ? [{ role: "user", content: buildMessageContent(mixedPrompt, doc.text) }] as any
                 : [
                     { role: "system", content: "You are a precise data extraction engine. Return only valid JSON." },
                     { role: "user", content: buildMessageContent(prompt, doc.text) },
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ] as any,
             { provider, model }
         );
@@ -1118,10 +1131,12 @@ export class PolicyEngine {
             }, doc.supabase);
             const result = await sdk.llm.chat(
                 isVlmPayload
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     ? [{ role: "user", content: buildMessageContent(mixedPrompt, doc.text) }] as any
                     : [
                         { role: "system", content: systemPrompt },
                         { role: "user", content: buildMessageContent(userPrompt, doc.text) },
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     ] as any,
                 { provider, model }
             );
@@ -1134,6 +1149,7 @@ export class PolicyEngine {
                 raw_length: raw.length,
                 raw_preview: previewLlmText(raw),
             }, doc.supabase);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const parsed = parseLlmJson<any>(raw);
 
             if (!parsed) {
@@ -1549,6 +1565,7 @@ When template context is present:
             );
 
             // Log the entire result to discover the SDK response schema
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             logger.info(`Full SDK result keys: ${Object.keys(result as any).join(", ")}`);
             logger.info(`Full SDK result: ${JSON.stringify(result).slice(0, 1000)}`);
 

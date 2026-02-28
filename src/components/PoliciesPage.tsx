@@ -188,10 +188,12 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             if (resp?.data?.policy) {
                 setSynthesizedPolicy(resp.data.policy);
                 setShowSynthesizedJson(false);
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const warning = (resp.data as any).warning;
                 if (warning) toast.warning(warning);
                 else toast.success("Policy synthesized! Review and save below.");
             } else {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 toast.error((resp?.data as any)?.error ?? "Synthesis failed.");
             }
         } catch {

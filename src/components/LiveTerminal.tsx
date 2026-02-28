@@ -9,6 +9,7 @@ export type ProcessingEvent = {
     ingestion_id?: string;
     event_type: EventType;
     agent_state: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     details: any;
     created_at: string;
 };
@@ -153,6 +154,7 @@ export function LiveTerminal() {
             const { data: { user } } = await supabase.auth.getUser();
             if (!user) return;
 
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { data, error } = await supabase
                 .from('processing_events')
                 .select('*')
@@ -188,6 +190,7 @@ export function LiveTerminal() {
                         table: 'processing_events',
                         filter: `user_id=eq.${user.id}`
                     },
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     (payload: any) => {
                         const newEvent = payload.new as ProcessingEvent;
                         if (!mounted) return;

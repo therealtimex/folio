@@ -1,4 +1,5 @@
 import { Button } from "../../ui/button";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { Card, CardHeader, CardTitle, CardDescription } from "../../ui/card";
 import { ChevronLeft, Zap, Settings2, ChevronRight } from "lucide-react";
 

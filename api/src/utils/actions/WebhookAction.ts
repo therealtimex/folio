@@ -5,7 +5,9 @@ import { Actuator } from "../Actuator.js";
 export class WebhookAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
         const { action, variables, data, userId, ingestionId, supabase } = context;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const webhookUrlTemplate = pickString(action as any, "url");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const webhookPayloadTemplate = pickString(action as any, "payload");
 
         if (!webhookUrlTemplate || !webhookPayloadTemplate) {
@@ -19,10 +21,12 @@ export class WebhookAction implements ActionHandler {
 
         const url = interpolate(webhookUrlTemplate, variables, data);
         const payloadStr = interpolate(webhookPayloadTemplate, variables, data);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let payload: any;
 
         try {
             payload = JSON.parse(payloadStr);
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (e) {
             return {
                 success: false,

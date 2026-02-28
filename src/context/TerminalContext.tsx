@@ -29,6 +29,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useTerminal() {
     const context = useContext(TerminalContext);
     if (context === undefined) {

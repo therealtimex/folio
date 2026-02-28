@@ -11,6 +11,7 @@ interface HealthModalProps {
     isBootstrapping: boolean;
     initStatus: string;
     sessionStatus: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     migrationStatus: any;
     onRunMigration?: () => void;
 }

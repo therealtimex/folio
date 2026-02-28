@@ -256,8 +256,11 @@ export class RAGService {
 
         const scopes = new Map<string, ModelScope>();
         for (const row of data || []) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const provider = String((row as any).embedding_provider || "").trim();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const model = String((row as any).embedding_model || "").trim();
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const vector_dim = Number((row as any).vector_dim);
             if (!provider || !model) continue;
             const key = `${provider}::${model}`;

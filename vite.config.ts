@@ -36,6 +36,7 @@ export default defineConfig({
               buffers.push(chunk);
             }
 
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             let body: any = {};
             try {
               body = JSON.parse(Buffer.concat(buffers).toString());

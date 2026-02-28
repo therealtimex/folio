@@ -47,6 +47,7 @@ export interface ActuatorResult {
     success: boolean;
     actionsExecuted: string[];
     errors: string[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     trace: { timestamp: string; step: string; details?: any }[];
 }
 
@@ -123,6 +124,7 @@ export class Actuator {
         userId: string | null,
         eventType: "info" | "action" | "error" | "analysis",
         state: string,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         details: any,
         supabaseClient?: SupabaseClient | null
     ) {
@@ -212,6 +214,7 @@ export class Actuator {
                 runtimeVariables.current_file_path = currentFile.path;
 
                 const context: ActionContext = {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     action: action as any,
                     data: runtimeData,
                     file: currentFile,

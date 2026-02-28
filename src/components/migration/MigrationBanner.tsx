@@ -3,6 +3,7 @@ import { AlertTriangle, Clock, Calendar, ChevronDown, ChevronUp, Minimize2, Spar
 import { Button } from "../ui/button";
 import { toast } from "../Toast";
 import type { MigrationStatus } from "../../lib/migration-check";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { cn } from "@/lib/utils";
 
 interface MigrationBannerProps {

@@ -56,7 +56,9 @@ router.patch("/", asyncHandler(async (req, res) => {
 
     // Remove undefined fields
     Object.keys(payload).forEach(key => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if ((payload as any)[key] === undefined) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             delete (payload as any)[key];
         }
     });

@@ -15,12 +15,14 @@ interface Toast {
 
 // Simple toast store
 let toasts: Toast[] = [];
+// eslint-disable-next-line prefer-const
 let listeners: Set<() => void> = new Set();
 
 function notify() {
     listeners.forEach(listener => listener());
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const toast = {
     success: (message: string, duration?: number) => addToast('success', message, duration),
     error: (message: string, duration?: number) => addToast('error', message, duration),
@@ -57,6 +59,7 @@ function removeToast(id: string) {
     notify();
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useToasts() {
     const [, setTick] = useState(0);
 

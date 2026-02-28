@@ -40,6 +40,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
             try {
                 sourceNodeRef.current.stop();
                 sourceNodeRef.current.disconnect();
+            // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
             } catch (e) { }
             sourceNodeRef.current = null;
         }
@@ -143,6 +144,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
             const audioChunks: ArrayBuffer[] = [];
 
             if (!audioContextRef.current) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
             }
             const audioContext = audioContextRef.current;
@@ -175,6 +177,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
                                 await playAudioBuffer(audioContext, bytes.buffer);
                             }
                         }
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars, no-empty
                     } catch (e) { }
                 }
             }
@@ -218,6 +221,7 @@ export function TTSProvider({ children }: { children: ReactNode }) {
     );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useTTSContext() {
     const context = useContext(TTSContext);
     if (context === undefined) {

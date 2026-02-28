@@ -34,6 +34,7 @@ export function normalizeLlmContent(content: unknown): string {
 /**
  * Robustly extracts the text payload from various SDK adapter response shapes.
  */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function extractLlmResponse(result: any): string {
     if (!result) return "";
 

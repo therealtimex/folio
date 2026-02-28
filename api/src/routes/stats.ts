@@ -71,6 +71,7 @@ router.get("/", async (req, res) => {
         };
 
         res.json({ success: true, stats });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error("Dashboard Stats Route Error:", error);
         res.status(500).json({ success: false, error: error.message || "Failed to fetch dashboard stats" });

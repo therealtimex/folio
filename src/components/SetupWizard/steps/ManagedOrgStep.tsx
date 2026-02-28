@@ -2,6 +2,7 @@ import { Button } from "../../ui/button";
 import { Input } from "../../ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
 import { Label } from "../../ui/label";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { Card } from "../../ui/card";
 import { ChevronLeft, Building2, Globe, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";

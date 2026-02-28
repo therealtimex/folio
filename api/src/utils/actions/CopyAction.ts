@@ -8,8 +8,11 @@ import { GoogleDriveService } from "../../services/GoogleDriveService.js";
 export class CopyAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
         const { action, file, variables, data, userId, ingestionId, supabase } = context;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const destination = pickString(action as any, "destination");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const pattern = pickString(action as any, "pattern");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const filenameConfig = pickString(action as any, "filename");
 
         if (!destination) {

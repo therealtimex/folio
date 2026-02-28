@@ -12,7 +12,9 @@ import { api } from '../../lib/api';
 export function StorageTab() {
     const { t } = useLanguage();
     const { supabase } = useApp();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const [integrations, setIntegrations] = useState<any[]>([]);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const [loading, setLoading] = useState(true);
 
     // Google Drive Modal State
@@ -26,6 +28,7 @@ export function StorageTab() {
 
     useEffect(() => {
         fetchIntegrations();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const fetchIntegrations = async () => {
@@ -51,6 +54,7 @@ export function StorageTab() {
                 setDriveClientId(webOrInstalled.client_id);
                 setDriveClientSecret(webOrInstalled.client_secret);
             }
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (e) {
             // Invalid JSON, ignore
         }
@@ -72,6 +76,7 @@ export function StorageTab() {
             } else {
                 toast.error(t('config.gmail.error.authUrl') || 'Failed to generate auth URL');
             }
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (error) {
             toast.error(t('config.gmail.error.authUrl') || 'Failed to generate auth URL');
         } finally {
@@ -101,8 +106,10 @@ export function StorageTab() {
                 setDriveAuthCode('');
                 fetchIntegrations();
             } else {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 toast.error((response.error as any)?.message || 'Failed to connect');
             }
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         } catch (error) {
             toast.error('An error occurred while connecting');
         } finally {

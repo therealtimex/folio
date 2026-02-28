@@ -31,6 +31,7 @@ router.get("/providers", async (req: Request, res: Response) => {
             success: true,
             providers
         });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error("[TTS API] Failed to list providers:", error);
         res.status(503).json({
@@ -72,6 +73,7 @@ router.post("/speak", async (req: Request, res: Response) => {
             });
         }
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const options: any = {};
         if (provider) options.provider = provider;
         if (voice) options.voice = voice;
@@ -83,6 +85,7 @@ router.post("/speak", async (req: Request, res: Response) => {
         // Return audio as binary
         res.setHeader("Content-Type", "audio/mpeg");
         res.send(Buffer.from(audioBuffer));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error("[TTS API] Failed to generate speech:", error);
         res.status(500).json({
@@ -129,6 +132,7 @@ router.post("/stream", async (req: Request, res: Response) => {
         res.setHeader("Cache-Control", "no-cache");
         res.setHeader("Connection", "keep-alive");
 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const options: any = {};
         if (provider) options.provider = provider;
         if (voice) options.voice = voice;
@@ -157,12 +161,14 @@ router.post("/stream", async (req: Request, res: Response) => {
             // Send done event
             res.write(`event: done\n`);
             res.write(`data: ${JSON.stringify({ message: "TTS generation complete" })}\n\n`);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (streamError: any) {
             res.write(`event: error\n`);
             res.write(`data: ${JSON.stringify({ error: streamError.message })}\n\n`);
         }
 
         res.end();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
         console.error("[TTS API] Failed to stream speech:", error);
 

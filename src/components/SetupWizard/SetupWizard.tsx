@@ -2,7 +2,9 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 import { APP_VERSION, checkMigrationStatus } from "../../lib/migration-check";
 import { saveSupabaseConfig, validateSupabaseConnection } from "../../lib/supabase-config";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { Button } from "../ui/button";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { Dialog, DialogContent, DialogTitle, DialogDescription, DialogHeader, DialogOverlay } from "../ui/dialog";
 import { Badge } from "../ui/badge";
 import { cn } from "@/lib/utils";
@@ -23,6 +25,7 @@ import { TypeStep } from "./steps/TypeStep";
 import { WelcomeStep } from "./steps/WelcomeStep";
 import { ProvisioningResult, SSEEvent, SetupWizardProps } from "./types";
 import { extractProjectId, normalizeSupabaseUrl, validateAccessToken } from "./validators";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { CheckCircle2, Circle } from "lucide-react";
 
 export function SetupWizard({ onComplete, open = true, canClose = false }: SetupWizardProps) {

@@ -8,6 +8,7 @@ import { getServiceRoleSupabase } from "../../services/supabase.js";
 export class RenameAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
         const { action, file, variables, data, userId, ingestionId, supabase } = context;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const pattern = pickString(action as any, "pattern");
 
         if (!pattern) {

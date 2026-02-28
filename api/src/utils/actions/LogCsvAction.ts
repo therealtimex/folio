@@ -7,6 +7,7 @@ import { Actuator } from "../Actuator.js";
 export class LogCsvAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
         const { action, variables, data, userId, ingestionId, supabase } = context;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const csvPathTemplate = pickString(action as any, "path");
 
         if (!csvPathTemplate) {
@@ -19,6 +20,7 @@ export class LogCsvAction implements ActionHandler {
         }
 
         const csvPath = interpolate(csvPathTemplate, variables, data);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const cols = pickColumns(action as any, Object.keys(data));
         const row = cols.map((c) => getNestedVariable(c, variables, data) ?? "").join(",") + "\n";
         const header = cols.join(",") + "\n";

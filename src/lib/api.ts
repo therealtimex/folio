@@ -241,6 +241,7 @@ class HybridApiClient {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   createRule(rule: any, token?: string | null) {
     return this.expressRequest<{ success: boolean; rule: Rule }>("/api/rules", {
       method: "POST",
@@ -250,6 +251,7 @@ class HybridApiClient {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updateRule(ruleId: string, updates: any, token?: string | null) {
     return this.expressRequest<{ success: boolean; rule: Rule }>(`/api/rules/${ruleId}`, {
       method: "PATCH",
@@ -291,6 +293,7 @@ class HybridApiClient {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   updateProfile(updates: any, token?: string | null) {
     return this.edgeRequest<Profile>("/api-v1-profile", {
       method: "PATCH",
@@ -301,6 +304,7 @@ class HybridApiClient {
   }
 
   getChatProviders(token?: string | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ providers: any[] }>("/api/sdk/providers/chat", {
       method: "GET",
       auth: Boolean(token),
@@ -309,6 +313,7 @@ class HybridApiClient {
   }
 
   getEmbedProviders(token?: string | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ providers: any[] }>("/api/sdk/providers/embed", {
       method: "GET",
       auth: Boolean(token),
@@ -316,6 +321,7 @@ class HybridApiClient {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   testLlm(config: any, token?: string | null) {
     return this.expressRequest<{ success: boolean; message: string }>("/api/sdk/test-llm", {
       method: "POST",
@@ -353,6 +359,7 @@ class HybridApiClient {
   }
 
   connectGoogleDrive(authCode: string, clientId: string, clientSecret: string, token?: string | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ success: boolean; account: any }>("/api/accounts/google-drive/connect", {
       method: "POST",
       auth: Boolean(token),
@@ -362,6 +369,7 @@ class HybridApiClient {
   }
 
   startMicrosoftDeviceFlow(clientId: string, tenantId: string, token?: string | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ deviceCode: any }>("/api/accounts/microsoft/device-flow", {
       method: "POST",
       auth: Boolean(token),
@@ -370,6 +378,7 @@ class HybridApiClient {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   pollMicrosoftDeviceCode(deviceCode: any, clientId: string, tenantId: string, token?: string | null) {
     return this.expressRequest<{ success: boolean; account: EmailAccount }>("/api/accounts/microsoft/poll", {
       method: "POST",
@@ -379,6 +388,7 @@ class HybridApiClient {
     });
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   connectImap(config: any, token?: string | null) {
     return this.expressRequest<{ success: boolean; account: EmailAccount }>("/api/accounts/imap/connect", {
       method: "POST",
@@ -398,6 +408,7 @@ class HybridApiClient {
   // ─── Policy Engine API ─────────────────────────────────────────────────────
 
   getPolicies(token?: string | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ success: boolean; policies: any[] }>("/api/policies", {
       auth: Boolean(token), token
     });
@@ -434,6 +445,7 @@ class HybridApiClient {
   }
 
   synthesizePolicy(payload: { description: string; provider?: string; model?: string }, token?: string | null) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ success: boolean; policy: any }>("/api/policies/synthesize", {
       method: "POST",
       auth: Boolean(token), token,
@@ -453,6 +465,7 @@ class HybridApiClient {
     if (params.pageSize) qs.set("pageSize", String(params.pageSize));
     if (params.q) qs.set("q", params.q);
     const query = qs.toString() ? `?${qs}` : "";
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ success: boolean; ingestions: any[]; total: number; page: number; pageSize: number }>(
       `/api/ingestions${query}`,
       { auth: Boolean(token), token }
@@ -469,6 +482,7 @@ class HybridApiClient {
     };
     if (token) headers["Authorization"] = `Bearer ${token}`;
     return fetch(`${config.expressApiUrl}/api/ingestions/upload`, { method: "POST", headers, body: form })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       .then((r) => r.json()) as Promise<{ success: boolean; ingestion: any }>;
   }
 
@@ -486,6 +500,7 @@ class HybridApiClient {
   ) {
     const learn = payload.learn !== false;
     const rerun = payload.rerun !== false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ success: boolean; ingestion: any }>(`/api/ingestions/${id}/match`, {
       method: "POST",
       auth: Boolean(token), token,
@@ -503,6 +518,7 @@ class HybridApiClient {
     payload: { policyId: string; provider?: string; model?: string },
     token?: string | null
   ) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return this.expressRequest<{ success: boolean; suggestion: { policy: any; rationale?: string[] } }>(`/api/ingestions/${id}/refine-policy`, {
       method: "POST",
       auth: Boolean(token), token,

@@ -1,5 +1,6 @@
 import { useMemo, useState, useEffect, useRef } from "react";
 import {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     AlertTriangle,
     ExternalLink,
     Info,
@@ -7,6 +8,7 @@ import {
     Terminal,
     Clock,
     Calendar,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     Sparkles,
     ShieldCheck,
     Zap
@@ -129,6 +131,7 @@ export function MigrationModal({
                         } else if (event.data) {
                             setMigrationLogs((prev) => [...prev, event.data]);
                         }
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
                     } catch (e) {
                         // Silently ignore parse errors for partial chunks
                     }

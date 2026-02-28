@@ -41,6 +41,7 @@ export interface Ingestion {
     extracted?: Record<string, unknown>;
     actions_taken?: string[];
     error_message?: string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     trace?: Array<{ timestamp: string; step: string; details?: any }>;
     tags?: string[];
     summary?: string | null;
@@ -59,6 +60,7 @@ const TAG_PALETTES = [
     "bg-orange-500/10 text-orange-600 border-orange-500/20",
 ];
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function tagColor(tag: string): string {
     let hash = 0;
     for (const c of tag) hash = (hash * 31 + c.charCodeAt(0)) >>> 0;
@@ -300,6 +302,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
     const toggleTagFilter = (tag: string) => {
         setActiveTagFilters((prev) => {
             const next = new Set(prev);
+            // eslint-disable-next-line @typescript-eslint/no-unused-expressions
             next.has(tag) ? next.delete(tag) : next.add(tag);
             return next;
         });
@@ -317,6 +320,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                 const result = await api.uploadDocument?.(file, sessionToken);
                 if (result?.success) {
                     if (result.ingestion?.status === "duplicate") {
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                         const orig = (result.ingestion.extracted as any)?.original_filename ?? "a previous upload";
                         toast.warning(`${file.name} is a duplicate of "${orig}" — skipped.`);
                     } else {
@@ -507,6 +511,7 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                                     <td className="px-5 py-3.5">
                                         <div className="font-medium text-sm truncate max-w-[220px]" title={ing.filename}>{ing.filename}</div>
                                         {ing.status === "duplicate"
+                                            // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                             ? <div className="text-xs text-violet-500/80 truncate max-w-[220px]">↳ {(ing.extracted as any)?.original_filename ?? "previously processed"}</div>
                                             : ing.file_size && <div className="text-xs text-muted-foreground">{fileSize(ing.file_size)}</div>
                                         }

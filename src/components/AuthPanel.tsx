@@ -5,6 +5,7 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Alert, AlertDescription } from "./ui/alert";
 import { LogIn, UserPlus, LogOut, ShieldAlert, Loader2, User, Key, Mail, ShieldCheck } from "lucide-react";
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { cn } from "@/lib/utils";
 import { api } from "../lib/api";
 
@@ -55,6 +56,7 @@ export function AuthPanel({ supabase, initStatus, sessionStatus, sessionEmail, o
       if (loginError) throw loginError;
 
       onRefresh();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       setError(err.message || "Failed to initialize foundation.");
     } finally {

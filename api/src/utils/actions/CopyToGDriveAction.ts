@@ -7,7 +7,9 @@ import { GoogleDriveService } from "../../services/GoogleDriveService.js";
 export class CopyToGDriveAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
         const { action, file, variables, data, userId, ingestionId, supabase } = context;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const destination = pickString(action as any, "destination");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const filenameConfig = pickString(action as any, "filename");
 
         const destDirId = destination ? interpolate(destination, variables, data) : undefined;

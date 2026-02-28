@@ -8,6 +8,7 @@ const logger = createLogger("NotifyAction");
 export class NotifyAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
         const { action, variables, data, userId, ingestionId, supabase } = context;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const messageTemplate = pickString(action as any, "message");
 
         if (!messageTemplate) {

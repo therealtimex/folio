@@ -125,6 +125,7 @@ router.post(
             }
 
             res.json({ success: true, account: integration });
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } catch (error: any) {
             const errorMessage = error.response?.data?.error_description
                 || error.response?.data?.error

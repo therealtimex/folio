@@ -33,7 +33,7 @@ interface AccountSettingsPageProps {
     sessionEmail: string | null;
     sessionStatus: "unknown" | "authenticated" | "anonymous" | "error";
     initStatus: "unknown" | "initialized" | "empty" | "missing_view" | "error";
-    configSnapshot: any;
+    configSnapshot: Record<string, unknown>;
     configSource: string;
     onRefresh: () => void;
     onLaunchSetup: () => void;
@@ -57,18 +57,12 @@ export function AccountSettingsPage({
     const [profile, setProfile] = useState<Profile | null>(null);
     const [isLoading, setIsLoading] = useState(false);
 
-    useEffect(() => {
-        if (sessionStatus === "authenticated" && supabase) {
-            fetchProfile();
-        }
-    }, [sessionStatus, supabase]);
-
     async function fetchProfile() {
         if (!supabase) return;
         setIsLoading(true);
         const { data: { user } } = await supabase.auth.getUser();
         if (user) {
-            const { data, error } = await supabase
+            const { data } = await supabase
                 .from("profiles")
                 .select("*")
                 .eq("id", user.id)
@@ -78,6 +72,14 @@ export function AccountSettingsPage({
         }
         setIsLoading(false);
     }
+
+    /* eslint-disable react-hooks/exhaustive-deps */
+    useEffect(() => {
+        if (sessionStatus === "authenticated" && supabase) {
+            fetchProfile();
+        }
+    }, [sessionStatus, supabase]);
+    /* eslint-enable react-hooks/exhaustive-deps */
 
     const tabs = [
         { id: "profile", label: "Profile", icon: User },
@@ -350,8 +352,8 @@ function ProfileSection({
                         {supabase && (
                             <AuthPanel
                                 supabase={supabase}
-                                initStatus={initStatus as any}
-                                sessionStatus={sessionStatus as any}
+                                initStatus={initStatus as never}
+                                sessionStatus={sessionStatus as never}
                                 sessionEmail={sessionEmail}
                                 onRefresh={onRefresh}
                             />
@@ -477,7 +479,7 @@ function SupabaseSection({
     onLaunchSetup,
     onResetSetup
 }: {
-    configSnapshot: any;
+    configSnapshot: Record<string, unknown>;
     configSource: string;
     onLaunchSetup: () => void;
     onResetSetup: () => void;

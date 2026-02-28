@@ -80,11 +80,13 @@ export class SDKService {
         // @ts-ignore ping available in desktop bridge
         await sdk.ping();
         return true;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
       } catch (e) {
         // Fallback to providers check if ping not available/fails
         await sdk.llm.chatProviders();
         return true;
       }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       logger.warn("SDK not available", { error: error.message });
       return false;
@@ -95,6 +97,7 @@ export class SDKService {
    * Helper to wrap a promise with a timeout
    */
   static async withTimeout<T>(promise: Promise<T>, timeoutMs: number, errorMessage: string): Promise<T> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let timeoutHandle: any;
     const timeoutPromise = new Promise<never>((_, reject) => {
       timeoutHandle = setTimeout(() => reject(new Error(errorMessage)), timeoutMs);
@@ -151,6 +154,7 @@ export class SDKService {
         isDefaultFallback: !preferred
       };
       return this.defaultChatProvider;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       logger.warn("Failed to get default chat provider from SDK", error);
       return {
@@ -199,6 +203,7 @@ export class SDKService {
         isDefaultFallback: !preferred
       };
       return this.defaultEmbedProvider;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
       logger.warn("Failed to get default embed provider from SDK", error);
       return {

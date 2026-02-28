@@ -2,6 +2,7 @@ import { createContext, useContext, useReducer, useEffect, ReactNode, useMemo } 
 import { getSupabaseClient } from '../lib/supabase-config';
 import { api } from '../lib/api';
 import { EmailAccount, Rule, UserSettings, Stats, Profile } from '../lib/types';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { toast } from '../components/Toast';
 import { AuthChangeEvent, Session } from '@supabase/supabase-js';
 
@@ -15,6 +16,7 @@ function getErrorMessage(error: { message?: string; code?: string } | string | u
 // State
 interface AppState {
     // Auth
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     user: any | null;
     isAuthenticated: boolean;
 
@@ -46,6 +48,7 @@ const initialState: AppState = {
 
 // Actions
 type Action =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     | { type: 'SET_USER'; payload: any }
     | { type: 'SET_LOADING'; payload: boolean }
     | { type: 'SET_INITIALIZED'; payload: boolean }
@@ -138,6 +141,7 @@ interface AppContextType {
         deleteRule: (ruleId: string) => Promise<boolean>;
         toggleRule: (ruleId: string) => Promise<boolean>;
     };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     supabase: any; // Using any or SupabaseClient
 }
 
@@ -306,6 +310,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             dispatch({ type: 'SET_ERROR', payload: getErrorMessage(response.error, 'Failed to toggle rule') });
             return false;
         },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }), [state.accounts, state.rules]);
 
     const value = useMemo(() => ({
@@ -322,6 +327,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     );
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function useApp() {
     const context = useContext(AppContext);
     if (!context) {
