@@ -65,8 +65,8 @@ export const config = {
   packageRoot,
   port: cliArgs.port || (process.env.PORT ? Number.parseInt(process.env.PORT, 10) : 3006),
   noUi: cliArgs.noUi,
-  nodeEnv: process.env.NODE_ENV || "development",
-  isProduction: process.env.NODE_ENV === "production",
+  nodeEnv: process.env.NODE_ENV || "production",
+  isProduction: (process.env.NODE_ENV || "production") === "production",
   rootDir: packageRoot,
   scriptsDir: join(packageRoot, "scripts"),
 
@@ -89,12 +89,16 @@ export const config = {
 export function validateConfig(): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  if (config.isProduction && config.security.jwtSecret === "dev-secret-change-in-production") {
-    errors.push("JWT_SECRET must be set in production");
-  }
+  const isHostedCloud = process.env.IS_HOSTED_CLOUD === "true";
 
-  if (config.isProduction && !config.security.encryptionKey) {
-    errors.push("TOKEN_ENCRYPTION_KEY must be set in production");
+  if (config.isProduction && isHostedCloud) {
+    if (config.security.jwtSecret === "dev-secret-change-in-production") {
+      errors.push("JWT_SECRET must be set in cloud production");
+    }
+
+    if (!config.security.encryptionKey) {
+      errors.push("TOKEN_ENCRYPTION_KEY must be set in cloud production");
+    }
   }
 
   return {
