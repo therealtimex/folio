@@ -37,6 +37,8 @@ interface PolicyMetadata {
     priority: number;
     enabled?: boolean;
     tags?: string[];
+    learning_examples?: number;
+    learning_last_at?: string | null;
 }
 
 interface PolicyAction {
@@ -1049,6 +1051,11 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                                         <div className="flex items-center gap-2 flex-wrap">
                                                             <span className="font-bold text-sm truncate">{p.metadata.name}</span>
                                                             <Badge variant="outline" className="text-[9px] shrink-0">P{p.metadata.priority}</Badge>
+                                                            {(p.metadata.learning_examples ?? 0) > 0 && (
+                                                                <Badge variant="secondary" className="text-[9px] shrink-0">
+                                                                    Learned {p.metadata.learning_examples}
+                                                                </Badge>
+                                                            )}
                                                             {p.metadata.tags?.map((tag) => (
                                                                 <Badge key={tag} variant="secondary" className="text-[9px] gap-1 shrink-0">
                                                                     <Tag className="w-2.5 h-2.5" />{tag}
@@ -1137,6 +1144,12 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                                         )) ?? <span className="text-muted-foreground/60">—</span>}
                                                     </div>
                                                 </div>
+                                                {(p.metadata.learning_examples ?? 0) > 0 && (
+                                                    <p className="text-[10px] text-muted-foreground">
+                                                        Learned examples: {p.metadata.learning_examples}
+                                                        {p.metadata.learning_last_at ? ` · last on ${new Date(p.metadata.learning_last_at).toLocaleDateString()}` : ""}
+                                                    </p>
+                                                )}
                                             </div>
                                         )}
                                     </div>

@@ -3,6 +3,7 @@ import { asyncHandler } from "../middleware/errorHandler.js";
 import { optionalAuth } from "../middleware/auth.js";
 import { PolicyLoader } from "../services/PolicyLoader.js";
 import { PolicyEngine } from "../services/PolicyEngine.js";
+import { PolicyLearningService } from "../services/PolicyLearningService.js";
 
 const router = Router();
 
@@ -15,7 +16,30 @@ router.get(
     "/",
     asyncHandler(async (req, res) => {
         const policies = await PolicyLoader.load(false, req.supabase);
-        res.json({ success: true, policies });
+        if (!req.supabase || !req.user || policies.length === 0) {
+            res.json({ success: true, policies });
+            return;
+        }
+
+        const stats = await PolicyLearningService.getPolicyLearningStats({
+            supabase: req.supabase,
+            userId: req.user.id,
+            policyIds: policies.map((policy) => policy.metadata.id),
+        });
+
+        const enrichedPolicies = policies.map((policy) => {
+            const stat = stats[policy.metadata.id];
+            return {
+                ...policy,
+                metadata: {
+                    ...policy.metadata,
+                    learning_examples: stat?.samples ?? 0,
+                    learning_last_at: stat?.lastSampleAt ?? null,
+                },
+            };
+        });
+
+        res.json({ success: true, policies: enrichedPolicies });
     })
 );
 

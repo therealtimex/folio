@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 import { api } from "../lib/api";
 import { getSupabaseClient } from "../lib/supabase-config";
 import { tagColor } from "./FunnelPage";
+import { toast } from "./Toast";
 import type { Ingestion } from "./FunnelPage";
 
 interface Props {
@@ -34,7 +35,144 @@ type ManualPolicyOption = {
     name: string;
     priority: number;
     riskyActions: string[];
+    learningExamples: number;
+    learningLastAt?: string | null;
 };
+
+type DraftPolicy = {
+    apiVersion: string;
+    kind: string;
+    metadata: {
+        id: string;
+        name: string;
+        description: string;
+        priority: number;
+        version?: string;
+        enabled?: boolean;
+        tags?: string[];
+        [key: string]: unknown;
+    };
+    spec: {
+        match: { strategy: string; conditions: Array<{ type: string; value?: string | string[] }> };
+        extract?: Array<{ key: string; type: string; required?: boolean }>;
+        actions?: Array<{ type: string; [key: string]: unknown }>;
+        [key: string]: unknown;
+    };
+    [key: string]: unknown;
+};
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    return value as Record<string, unknown>;
+}
+
+function mapManualPolicyOptions(rawPolicies: unknown[]): ManualPolicyOption[] {
+    const out: ManualPolicyOption[] = [];
+
+    for (const raw of rawPolicies) {
+        const policy = toRecord(raw);
+        if (!policy) continue;
+        const metadata = toRecord(policy.metadata) ?? {};
+        const spec = toRecord(policy.spec) ?? {};
+        const actions = Array.isArray(spec.actions) ? spec.actions : [];
+
+        const id = typeof metadata.id === "string" ? metadata.id.trim() : "";
+        if (!id) continue;
+
+        const riskyActions = actions
+            .map((action) => {
+                const record = toRecord(action);
+                return typeof record?.type === "string" ? record.type.trim() : "";
+            })
+            .filter((actionType) =>
+                actionType === "append_to_google_sheet" ||
+                actionType === "webhook" ||
+                actionType === "copy_to_gdrive" ||
+                actionType === "copy" ||
+                actionType === "log_csv" ||
+                actionType === "notify"
+            );
+
+        out.push({
+            id,
+            name: typeof metadata.name === "string" ? metadata.name : id,
+            priority: typeof metadata.priority === "number" ? metadata.priority : 100,
+            riskyActions,
+            learningExamples: typeof metadata.learning_examples === "number" ? metadata.learning_examples : 0,
+            learningLastAt: typeof metadata.learning_last_at === "string" ? metadata.learning_last_at : null,
+        });
+    }
+
+    out.sort((a, b) => b.priority - a.priority);
+    return out;
+}
+
+type LearnedDiagnostics = {
+    reason?: string;
+    evaluatedPolicies?: number;
+    evaluatedSamples?: number;
+    bestCandidate?: Record<string, unknown>;
+    topCandidates?: Array<Record<string, unknown>>;
+};
+
+function getLatestLearnedDiagnostics(trace: Ingestion["trace"] | undefined): LearnedDiagnostics | null {
+    if (!Array.isArray(trace) || trace.length === 0) return null;
+    const reversed = [...trace].reverse();
+    const entry = reversed.find((item) => {
+        const step = String(item?.step ?? "").toLowerCase();
+        return step.includes("learned fallback") || step.includes("learned policy candidate selected");
+    });
+    if (!entry) return null;
+    const step = String(entry.step ?? "").toLowerCase();
+    const details = toRecord(entry.details);
+    if (!details) return null;
+    const inferredReason =
+        typeof details.reason === "string"
+            ? details.reason
+            : step.includes("candidate selected")
+                ? "accepted"
+                : undefined;
+    const inferredBestCandidate =
+        toRecord(details.bestCandidate) ??
+        (typeof details.policyId === "string" || typeof details.score === "number" || typeof details.support === "number"
+            ? {
+                policyId: details.policyId,
+                score: details.score,
+                support: details.support,
+            }
+            : undefined);
+    return {
+        reason: inferredReason,
+        evaluatedPolicies: typeof details.evaluatedPolicies === "number" ? details.evaluatedPolicies : undefined,
+        evaluatedSamples: typeof details.evaluatedSamples === "number" ? details.evaluatedSamples : undefined,
+        bestCandidate: inferredBestCandidate,
+        topCandidates: Array.isArray(details.topCandidates)
+            ? details.topCandidates.map((candidate) => toRecord(candidate)).filter((candidate): candidate is Record<string, unknown> => !!candidate)
+            : undefined,
+    };
+}
+
+function formatLearningReason(reason?: string): string {
+    if (!reason) return "No learned candidate details available yet.";
+    switch (reason) {
+        case "accepted":
+            return "Learned fallback selected a policy candidate.";
+        case "no_policy_ids":
+            return "No candidate policies available for learned fallback.";
+        case "no_document_features":
+            return "Document had insufficient signals for learned fallback scoring.";
+        case "no_feedback_samples":
+            return "No learned examples yet. Match at least one document with learning enabled.";
+        case "no_valid_samples":
+            return "Learned examples exist but were too sparse to score.";
+        case "score_below_threshold":
+            return "A candidate was found but confidence stayed below threshold.";
+        case "read_error":
+            return "Learned fallback could not read feedback history.";
+        default:
+            return reason.replace(/_/g, " ");
+    }
+}
 
 function StatusIcon({ status }: { status: Ingestion["status"] }) {
     const map = {
@@ -135,7 +273,15 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string
     return (
         <div
             className="flex flex-wrap items-center gap-1.5 rounded-xl border px-3 py-2 bg-background min-h-[36px] cursor-text"
+            role="button"
+            tabIndex={0}
             onClick={() => inputRef.current?.focus()}
+            onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    inputRef.current?.focus();
+                }
+            }}
         >
             {tags.map((tag) => (
                 <span
@@ -193,9 +339,16 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
     const [allowSideEffects, setAllowSideEffects] = useState(false);
     const [isApplyingManualMatch, setIsApplyingManualMatch] = useState(false);
     const [manualMatchError, setManualMatchError] = useState<string | null>(null);
+    const [isSuggestingRefinement, setIsSuggestingRefinement] = useState(false);
+    const [isApplyingRefinement, setIsApplyingRefinement] = useState(false);
+    const [refinementDraft, setRefinementDraft] = useState<DraftPolicy | null>(null);
+    const [refinementRationale, setRefinementRationale] = useState<string[]>([]);
+    const [refinementError, setRefinementError] = useState<string | null>(null);
+    const [showRefinementJson, setShowRefinementJson] = useState(false);
 
     const canSummarize = ing.status !== "pending" && ing.status !== "processing";
     const canManualMatch = !!onManualMatch && !ing.policy_name && ing.status !== "pending" && ing.status !== "processing";
+    const learnedDiagnostics = getLatestLearnedDiagnostics(ing.trace);
 
     useEffect(() => {
         if (!canSummarize) return;
@@ -236,24 +389,7 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                     throw new Error(message || "Failed to load policies.");
                 }
 
-                const policies = (response?.data?.policies ?? [])
-                    .map((policy: any) => ({
-                        id: String(policy?.metadata?.id ?? ""),
-                        name: String(policy?.metadata?.name ?? policy?.metadata?.id ?? ""),
-                        priority: Number(policy?.metadata?.priority ?? 100),
-                        riskyActions: (Array.isArray(policy?.spec?.actions) ? policy.spec.actions : [])
-                            .map((action: any) => String(action?.type ?? "").trim())
-                            .filter((actionType: string) =>
-                                actionType === "append_to_google_sheet" ||
-                                actionType === "webhook" ||
-                                actionType === "copy_to_gdrive" ||
-                                actionType === "copy" ||
-                                actionType === "log_csv" ||
-                                actionType === "notify"
-                            ),
-                    }))
-                    .filter((policy: ManualPolicyOption) => policy.id.length > 0)
-                    .sort((a: ManualPolicyOption, b: ManualPolicyOption) => b.priority - a.priority);
+                const policies = mapManualPolicyOptions(response?.data?.policies ?? []);
 
                 setPolicyOptions(policies);
                 setSelectedPolicyId((prev) => prev || policies[0]?.id || "");
@@ -290,6 +426,9 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                 rerun: rerunOnMatch,
                 allowSideEffects: rerunOnMatch ? allowSideEffects : false,
             });
+            setRefinementDraft(null);
+            setRefinementRationale([]);
+            setRefinementError(null);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             setManualMatchError(message || "Failed to assign policy.");
@@ -297,6 +436,75 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
             setIsApplyingManualMatch(false);
         }
     }, [allowSideEffects, isApplyingManualMatch, learnFromMatch, onManualMatch, policyOptions, rerunOnMatch, selectedPolicyId]);
+
+    const handleSuggestRefinement = useCallback(async () => {
+        if (!selectedPolicyId || isSuggestingRefinement || isApplyingRefinement) return;
+        setIsSuggestingRefinement(true);
+        setRefinementError(null);
+        setRefinementDraft(null);
+        setRefinementRationale([]);
+        try {
+            const session = await getSupabaseClient()?.auth.getSession();
+            const token = session?.data?.session?.access_token ?? null;
+            const response = await api.suggestPolicyRefinement(
+                ing.id,
+                { policyId: selectedPolicyId },
+                token
+            );
+            if (response?.error) {
+                const message = typeof response.error === "string" ? response.error : response.error.message;
+                throw new Error(message || "Unable to suggest refinement.");
+            }
+
+            const draft = response?.data?.suggestion?.policy as DraftPolicy | undefined;
+            if (!draft) {
+                throw new Error("No policy refinement draft was returned.");
+            }
+
+            const rationale = Array.isArray(response?.data?.suggestion?.rationale)
+                ? response.data.suggestion.rationale.map((item: unknown) => String(item).trim()).filter(Boolean)
+                : [];
+            setRefinementDraft(draft);
+            setRefinementRationale(rationale);
+            setShowRefinementJson(false);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setRefinementError(message || "Unable to suggest refinement.");
+        } finally {
+            setIsSuggestingRefinement(false);
+        }
+    }, [ing.id, isApplyingRefinement, isSuggestingRefinement, selectedPolicyId]);
+
+    const handleApplyRefinement = useCallback(async () => {
+        if (!refinementDraft || isApplyingRefinement) return;
+        setIsApplyingRefinement(true);
+        setRefinementError(null);
+        try {
+            const session = await getSupabaseClient()?.auth.getSession();
+            const token = session?.data?.session?.access_token ?? null;
+            const saveResponse = await api.savePolicy(refinementDraft, token);
+            if (saveResponse?.error) {
+                const message = typeof saveResponse.error === "string" ? saveResponse.error : saveResponse.error.message;
+                throw new Error(message || "Failed to apply refinement.");
+            }
+            toast.success(`Applied refinement to policy "${refinementDraft.metadata.name}".`);
+            setRefinementDraft(null);
+            setRefinementRationale([]);
+            setRefinementError(null);
+            setShowRefinementJson(false);
+
+            const policiesResponse = await api.getPolicies(token);
+            if (!policiesResponse?.error) {
+                const nextOptions = mapManualPolicyOptions(policiesResponse?.data?.policies ?? []);
+                setPolicyOptions(nextOptions);
+            }
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setRefinementError(message || "Failed to apply refinement.");
+        } finally {
+            setIsApplyingRefinement(false);
+        }
+    }, [isApplyingRefinement, refinementDraft]);
 
     const selectedPolicy = policyOptions.find((policy) => policy.id === selectedPolicyId);
     const selectedRiskyActions = selectedPolicy?.riskyActions ?? [];
@@ -308,7 +516,19 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
     return (
         <div
             className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4"
+            role="button"
+            tabIndex={0}
             onClick={handleBackdrop}
+            onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                    e.preventDefault();
+                    onClose();
+                }
+                if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {
+                    e.preventDefault();
+                    onClose();
+                }
+            }}
         >
             <div className="bg-background border rounded-2xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
                 {/* Header */}
@@ -401,6 +621,9 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                                                     setSelectedPolicyId(e.target.value);
                                                     setAllowSideEffects(false);
                                                     setManualMatchError(null);
+                                                    setRefinementDraft(null);
+                                                    setRefinementRationale([]);
+                                                    setRefinementError(null);
                                                 }}
                                                 disabled={isLoadingPolicies || isApplyingManualMatch || policyOptions.length === 0}
                                             >
@@ -409,7 +632,9 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                                                 ) : (
                                                     policyOptions.map((policy) => (
                                                         <option key={policy.id} value={policy.id}>
-                                                            {policy.name}
+                                                            {policy.learningExamples > 0
+                                                                ? `${policy.name} (${policy.learningExamples} learned)`
+                                                                : policy.name}
                                                         </option>
                                                     ))
                                                 )}
@@ -423,7 +648,22 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                                             >
                                                 {isApplyingManualMatch ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Match To Policy"}
                                             </Button>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-8 rounded-lg"
+                                                disabled={isSuggestingRefinement || isApplyingRefinement || isLoadingPolicies || !selectedPolicyId}
+                                                onClick={handleSuggestRefinement}
+                                            >
+                                                {isSuggestingRefinement ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Suggest Refinement"}
+                                            </Button>
                                         </div>
+                                        {selectedPolicy && (
+                                            <p className="text-[10px] text-muted-foreground">
+                                                Learned examples for this policy: {selectedPolicy.learningExamples}
+                                                {selectedPolicy.learningLastAt ? ` · last on ${new Date(selectedPolicy.learningLastAt).toLocaleDateString()}` : ""}
+                                            </p>
+                                        )}
                                         <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
                                             <input
                                                 type="checkbox"
@@ -463,6 +703,68 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                                                 </label>
                                             </div>
                                         )}
+                                        {(refinementDraft || refinementError) && (
+                                            <div className="rounded-lg border border-primary/20 bg-primary/5 p-2.5 space-y-2">
+                                                <p className="text-[10px] uppercase tracking-wider font-semibold text-primary">
+                                                    Policy Refinement Preview
+                                                </p>
+                                                {refinementError && (
+                                                    <p className="text-[11px] text-destructive">{refinementError}</p>
+                                                )}
+                                                {refinementDraft && (
+                                                    <>
+                                                        <p className="text-[11px] text-foreground/90">
+                                                            {refinementDraft.metadata.name} · {refinementDraft.spec.match.conditions.length} match conditions · {(refinementDraft.spec.extract ?? []).length} extract fields
+                                                        </p>
+                                                        {refinementRationale.length > 0 && (
+                                                            <div className="space-y-1">
+                                                                {refinementRationale.map((line, idx) => (
+                                                                    <p key={`refine-rationale-${idx}`} className="text-[10px] text-muted-foreground">
+                                                                        {line}
+                                                                    </p>
+                                                                ))}
+                                                            </div>
+                                                        )}
+                                                        <div className="flex gap-1.5">
+                                                            <Button
+                                                                variant="outline"
+                                                                size="sm"
+                                                                className="h-7 rounded-lg text-[10px]"
+                                                                onClick={() => setShowRefinementJson((value) => !value)}
+                                                            >
+                                                                {showRefinementJson ? "Hide JSON" : "Show JSON"}
+                                                            </Button>
+                                                            <Button
+                                                                size="sm"
+                                                                className="h-7 rounded-lg text-[10px]"
+                                                                onClick={handleApplyRefinement}
+                                                                disabled={isApplyingRefinement}
+                                                            >
+                                                                {isApplyingRefinement ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Apply To Policy"}
+                                                            </Button>
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="sm"
+                                                                className="h-7 rounded-lg text-[10px]"
+                                                                onClick={() => {
+                                                                    setRefinementDraft(null);
+                                                                    setRefinementRationale([]);
+                                                                    setRefinementError(null);
+                                                                    setShowRefinementJson(false);
+                                                                }}
+                                                            >
+                                                                Discard
+                                                            </Button>
+                                                        </div>
+                                                        {showRefinementJson && (
+                                                            <pre className="rounded-md border border-border/40 bg-background p-2 text-[10px] overflow-auto max-h-48 whitespace-pre-wrap font-mono">
+                                                                {JSON.stringify(refinementDraft, null, 2)}
+                                                            </pre>
+                                                        )}
+                                                    </>
+                                                )}
+                                            </div>
+                                        )}
                                         {manualMatchError && (
                                             <p className="text-[11px] text-destructive">{manualMatchError}</p>
                                         )}
@@ -471,6 +773,28 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                             </div>
                         )}
                     </div>
+
+                    {learnedDiagnostics && (
+                        <div>
+                            <SectionLabel>Learning Diagnostics</SectionLabel>
+                            <div className="rounded-xl border bg-muted/20 px-4 py-3 space-y-1.5">
+                                <p className="text-xs text-foreground/90">{formatLearningReason(learnedDiagnostics.reason)}</p>
+                                {(learnedDiagnostics.evaluatedPolicies !== undefined || learnedDiagnostics.evaluatedSamples !== undefined) && (
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Evaluated policies: {learnedDiagnostics.evaluatedPolicies ?? 0} · samples: {learnedDiagnostics.evaluatedSamples ?? 0}
+                                    </p>
+                                )}
+                                {learnedDiagnostics.bestCandidate && (
+                                    <p className="text-[11px] text-muted-foreground font-mono">
+                                        Best: {String(learnedDiagnostics.bestCandidate.policyId ?? "-")} · score {String(learnedDiagnostics.bestCandidate.score ?? "-")} · support {String(learnedDiagnostics.bestCandidate.support ?? "-")}
+                                        {learnedDiagnostics.bestCandidate.requiredScore !== undefined
+                                            ? ` · needed ${String(learnedDiagnostics.bestCandidate.requiredScore)}`
+                                            : ""}
+                                    </p>
+                                )}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Extracted Data */}
                     {extracted && (

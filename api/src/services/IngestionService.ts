@@ -952,6 +952,69 @@ export class IngestionService {
     }
 
     /**
+     * Generate a user-reviewable refinement draft for an existing policy
+     * using evidence from a specific ingestion.
+     */
+    static async suggestPolicyRefinement(
+        ingestionId: string,
+        policyId: string,
+        supabase: SupabaseClient,
+        userId: string,
+        opts: { provider?: string; model?: string } = {}
+    ): Promise<{ policy: FolioPolicy; rationale: string[] }> {
+        const normalizedPolicyId = policyId.trim();
+        if (!normalizedPolicyId) {
+            throw new Error("policy_id is required");
+        }
+
+        const { data: ingestion, error: ingestionError } = await supabase
+            .from("ingestions")
+            .select("id,filename,mime_type,status,tags,summary,extracted,trace")
+            .eq("id", ingestionId)
+            .eq("user_id", userId)
+            .single();
+
+        if (ingestionError || !ingestion) {
+            throw new Error("Ingestion not found");
+        }
+
+        const policies = await PolicyLoader.load(false, supabase);
+        const targetPolicy = policies.find((policy) => policy.metadata.id === normalizedPolicyId);
+        if (!targetPolicy) {
+            throw new Error(`Policy "${normalizedPolicyId}" was not found or is disabled.`);
+        }
+
+        const suggestion = await PolicyEngine.suggestPolicyRefinement(
+            targetPolicy,
+            {
+                ingestionId,
+                filename: ingestion.filename as string,
+                mimeType: (ingestion.mime_type as string | null | undefined) ?? null,
+                status: String(ingestion.status ?? ""),
+                summary: (ingestion.summary as string | null | undefined) ?? null,
+                tags: Array.isArray(ingestion.tags) ? ingestion.tags.map((tag) => String(tag)) : [],
+                extracted: (ingestion.extracted as Record<string, unknown> | null | undefined) ?? {},
+                trace: Array.isArray(ingestion.trace) ? ingestion.trace as Array<{ timestamp: string; step: string; details?: unknown }> : [],
+            },
+            {
+                provider: opts.provider,
+                model: opts.model,
+                userId,
+                supabase,
+            }
+        );
+
+        if (!suggestion.policy) {
+            throw new Error(suggestion.error || "Unable to generate policy refinement suggestion.");
+        }
+
+        return {
+            policy: suggestion.policy,
+            rationale: suggestion.rationale,
+        };
+    }
+
+    /**
      * List ingestions for a user, newest first.
      * Supports server-side pagination and ILIKE search across native text columns
      * (filename, policy_name, summary). Tags are handled client-side via the

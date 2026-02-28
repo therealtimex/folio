@@ -157,6 +157,48 @@ router.post(
     })
 );
 
+// POST /api/ingestions/:id/refine-policy — suggest a refinement draft for a target policy
+router.post(
+    "/:id/refine-policy",
+    asyncHandler(async (req, res) => {
+        if (!req.supabase || !req.user) {
+            res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+
+        const policyId = typeof req.body?.policy_id === "string" ? req.body.policy_id.trim() : "";
+        if (!policyId) {
+            res.status(400).json({ success: false, error: "policy_id is required" });
+            return;
+        }
+
+        try {
+            const suggestion = await IngestionService.suggestPolicyRefinement(
+                req.params["id"] as string,
+                policyId,
+                req.supabase,
+                req.user.id,
+                {
+                    provider: typeof req.body?.provider === "string" ? req.body.provider : undefined,
+                    model: typeof req.body?.model === "string" ? req.body.model : undefined,
+                }
+            );
+            res.json({ success: true, suggestion });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (/not found/i.test(message)) {
+                res.status(404).json({ success: false, error: message });
+                return;
+            }
+            if (/required|disabled/i.test(message)) {
+                res.status(400).json({ success: false, error: message });
+                return;
+            }
+            throw error;
+        }
+    })
+);
+
 // POST /api/ingestions/:id/summarize — generate (or return cached) prose summary
 router.post(
     "/:id/summarize",

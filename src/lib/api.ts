@@ -498,6 +498,22 @@ class HybridApiClient {
     });
   }
 
+  suggestPolicyRefinement(
+    id: string,
+    payload: { policyId: string; provider?: string; model?: string },
+    token?: string | null
+  ) {
+    return this.expressRequest<{ success: boolean; suggestion: { policy: any; rationale?: string[] } }>(`/api/ingestions/${id}/refine-policy`, {
+      method: "POST",
+      auth: Boolean(token), token,
+      body: JSON.stringify({
+        policy_id: payload.policyId,
+        provider: payload.provider,
+        model: payload.model,
+      })
+    });
+  }
+
   deleteIngestion(id: string, token?: string | null) {
     return this.expressRequest<{ success: boolean }>(`/api/ingestions/${id}`, {
       method: "DELETE",

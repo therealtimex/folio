@@ -1001,28 +1001,40 @@ export class PolicyEngine {
                     documentText: learningText,
                 });
 
-                if (learned) {
-                    const learnedPolicy = policies.find((policy) => policy.metadata.id === learned.policyId);
+                if (learned.candidate) {
+                    const learnedPolicy = policies.find((policy) => policy.metadata.id === learned.candidate?.policyId);
                     if (learnedPolicy) {
                         globalTrace.push({
                             timestamp: new Date().toISOString(),
                             step: "Learned policy candidate selected",
                             details: {
-                                policyId: learned.policyId,
-                                score: learned.score,
-                                support: learned.support,
+                                policyId: learned.candidate.policyId,
+                                score: learned.candidate.score,
+                                support: learned.candidate.support,
+                                topCandidates: learned.diagnostics.topCandidates,
                             },
                         });
                         Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Policy Matching", {
                             action: "Learned policy candidate selected",
-                            policyId: learned.policyId,
-                            score: learned.score,
-                            support: learned.support,
+                            policyId: learned.candidate.policyId,
+                            score: learned.candidate.score,
+                            support: learned.candidate.support,
+                            topCandidates: learned.diagnostics.topCandidates,
                         }, doc.supabase);
-                        logger.info(`Matched policy via learned fallback: ${learned.policyId} (score=${learned.score.toFixed(3)}, support=${learned.support})`);
+                        logger.info(`Matched policy via learned fallback: ${learned.candidate.policyId} (score=${learned.candidate.score.toFixed(3)}, support=${learned.candidate.support})`);
                         return executeMatchedPolicy(learnedPolicy, doc, globalTrace, settings, baselineEntities, "learned");
                     }
                 }
+
+                globalTrace.push({
+                    timestamp: new Date().toISOString(),
+                    step: "Learned fallback analyzed",
+                    details: learned.diagnostics,
+                });
+                Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Policy Matching", {
+                    action: "Learned fallback analyzed",
+                    ...learned.diagnostics,
+                }, doc.supabase);
             } catch (learningError) {
                 logger.warn("Learned fallback lookup failed", { error: learningError });
             }
@@ -1247,6 +1259,171 @@ Rules:
                 }, opts.supabase);
             }
             return { suggestion: null, error: msg };
+        }
+    }
+
+    /**
+     * Suggest a refinement draft for an existing policy based on a specific
+     * ingestion that the user expected to match.
+     */
+    static async suggestPolicyRefinement(
+        currentPolicy: FolioPolicy,
+        docContext: {
+            ingestionId: string;
+            filename: string;
+            mimeType?: string | null;
+            status?: string;
+            summary?: string | null;
+            tags?: string[];
+            extracted?: Record<string, unknown> | null;
+            trace?: TraceLog[] | null;
+        },
+        opts: { provider?: string; model?: string; userId?: string; supabase?: SupabaseClient } = {}
+    ): Promise<{ policy: FolioPolicy | null; rationale: string[]; error?: string }> {
+        const sdk = SDKService.getSDK();
+        if (!sdk) {
+            const msg = "SDK not available for policy refinement";
+            logger.warn(msg);
+            return { policy: null, rationale: [], error: msg };
+        }
+
+        const defaults = await SDKService.getDefaultChatProvider();
+        const provider = opts.provider || defaults.provider;
+        const model = opts.model || defaults.model;
+
+        const compactTrace = (docContext.trace ?? [])
+            .slice(-12)
+            .map((entry) => ({
+                step: entry.step,
+                details: entry.details ?? null,
+            }));
+
+        const evidence = {
+            filename: docContext.filename,
+            mime_type: docContext.mimeType ?? null,
+            status: docContext.status ?? null,
+            summary: docContext.summary ?? null,
+            tags: docContext.tags ?? [],
+            extracted: docContext.extracted ?? {},
+            recent_trace: compactTrace,
+        };
+
+        const systemPrompt = `You are a Folio Policy Engine expert. Refine an existing policy so it better matches a target document while minimizing regressions.
+
+Return ONLY valid JSON with this exact shape:
+{
+  "policy": <full FolioPolicy object>,
+  "rationale": ["short reason 1", "short reason 2"]
+}
+
+Rules:
+- Keep metadata.id EXACTLY unchanged.
+- Preserve existing action targets unless the evidence clearly requires a correction.
+- Prefer tightening/adding deterministic match conditions (keyword/file_type) over broadening.
+- Keep extraction fields useful; do not remove important existing fields without a reason.
+- Ensure output remains a valid Folio policy schema.`;
+
+        const userPrompt =
+            `Current policy:\n${JSON.stringify(currentPolicy, null, 2)}\n\n` +
+            `Target document evidence:\n${JSON.stringify(evidence, null, 2)}\n\n` +
+            `Produce a refined policy draft and rationale.`;
+
+        try {
+            if (opts.userId) {
+                Actuator.logEvent(docContext.ingestionId, opts.userId, "analysis", "Policy Synthesis", {
+                    action: "LLM request (policy refinement)",
+                    provider,
+                    model,
+                    policy_id: currentPolicy.metadata.id,
+                }, opts.supabase);
+            }
+
+            const result = await sdk.llm.chat(
+                [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt },
+                ],
+                { provider, model }
+            );
+
+            const raw = extractLlmResponse(result);
+            if (opts.userId) {
+                Actuator.logEvent(docContext.ingestionId, opts.userId, "analysis", "Policy Synthesis", {
+                    action: "LLM response (policy refinement)",
+                    provider,
+                    model,
+                    raw_length: raw.length,
+                    raw_preview: previewLlmText(raw),
+                }, opts.supabase);
+            }
+
+            if (!raw.trim()) {
+                return { policy: null, rationale: [], error: "LLM returned empty refinement response" };
+            }
+
+            const parsed = parseLlmJson<{ policy?: FolioPolicy; rationale?: unknown }>(raw);
+            if (!parsed) {
+                return { policy: null, rationale: [], error: "LLM refinement response was not valid JSON" };
+            }
+
+            const parsedPolicy = parsed.policy ?? (parsed as unknown as FolioPolicy);
+            if (!parsedPolicy || typeof parsedPolicy !== "object") {
+                return { policy: null, rationale: [], error: "Refinement response did not include a policy draft" };
+            }
+
+            const repairedPolicy: FolioPolicy = {
+                ...currentPolicy,
+                ...parsedPolicy,
+                apiVersion: "folio/v1",
+                kind: "Policy",
+                metadata: {
+                    ...currentPolicy.metadata,
+                    ...(parsedPolicy.metadata ?? {}),
+                    id: currentPolicy.metadata.id,
+                    version: parsedPolicy.metadata?.version ?? currentPolicy.metadata.version ?? "1.0.0",
+                    enabled: parsedPolicy.metadata?.enabled ?? currentPolicy.metadata.enabled ?? true,
+                    priority: parsedPolicy.metadata?.priority ?? currentPolicy.metadata.priority,
+                    name: parsedPolicy.metadata?.name ?? currentPolicy.metadata.name,
+                    description: parsedPolicy.metadata?.description ?? currentPolicy.metadata.description,
+                },
+                spec: {
+                    ...currentPolicy.spec,
+                    ...(parsedPolicy.spec ?? {}),
+                    match: parsedPolicy.spec?.match ?? currentPolicy.spec.match,
+                    extract: Array.isArray(parsedPolicy.spec?.extract)
+                        ? parsedPolicy.spec.extract
+                        : currentPolicy.spec.extract,
+                    actions: Array.isArray(parsedPolicy.spec?.actions) && parsedPolicy.spec.actions.length > 0
+                        ? parsedPolicy.spec.actions
+                        : currentPolicy.spec.actions,
+                },
+            };
+
+            if (!PolicyLoader.validate(repairedPolicy)) {
+                return { policy: null, rationale: [], error: "Refined policy draft did not pass schema validation" };
+            }
+
+            const rationale = Array.isArray(parsed.rationale)
+                ? parsed.rationale.map((item) => String(item).trim()).filter(Boolean).slice(0, 6)
+                : [];
+
+            return {
+                policy: repairedPolicy,
+                rationale,
+            };
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.error("Policy refinement suggestion failed", { err });
+            if (opts.userId) {
+                Actuator.logEvent(docContext.ingestionId, opts.userId, "error", "Policy Synthesis", {
+                    action: "LLM policy refinement failed",
+                    provider,
+                    model,
+                    error: msg,
+                    policy_id: currentPolicy.metadata.id,
+                }, opts.supabase);
+            }
+            return { policy: null, rationale: [], error: msg };
         }
     }
 

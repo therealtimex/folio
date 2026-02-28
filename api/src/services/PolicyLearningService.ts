@@ -31,6 +31,35 @@ type CandidatePolicy = {
     support: number;
 };
 
+type CandidatePolicyScore = CandidatePolicy & {
+    requiredScore: number;
+    accepted: boolean;
+};
+
+export type PolicyLearningDecisionReason =
+    | "accepted"
+    | "no_policy_ids"
+    | "no_document_features"
+    | "no_feedback_samples"
+    | "no_valid_samples"
+    | "score_below_threshold"
+    | "read_error";
+
+export type PolicyLearningDiagnostics = {
+    reason: PolicyLearningDecisionReason;
+    evaluatedPolicies: number;
+    evaluatedSamples: number;
+    bestCandidate?: CandidatePolicyScore;
+    topCandidates: CandidatePolicyScore[];
+};
+
+export type LearnedCandidateResolution = {
+    candidate: CandidatePolicy | null;
+    diagnostics: PolicyLearningDiagnostics;
+};
+
+export type PolicyLearningStats = Record<string, { samples: number; lastSampleAt: string | null }>;
+
 function normalizeText(value: unknown): string {
     if (value == null) return "";
     return String(value).toLowerCase().trim();
@@ -125,6 +154,10 @@ function clamp01(value: number): number {
     if (value < 0) return 0;
     if (value > 1) return 1;
     return value;
+}
+
+function requiredScoreForSupport(support: number): number {
+    return support >= 2 ? 0.72 : 0.82;
 }
 
 function scorePair(doc: PolicyLearningFeatures, sample: PolicyLearningFeatures): number {
@@ -287,6 +320,49 @@ export class PolicyLearningService {
         });
     }
 
+    static async getPolicyLearningStats(opts: {
+        supabase: SupabaseClient;
+        userId: string;
+        policyIds?: string[];
+    }): Promise<PolicyLearningStats> {
+        const { supabase, userId } = opts;
+        const normalizedPolicyIds = (opts.policyIds ?? []).map((id) => id.trim()).filter(Boolean);
+
+        let query = supabase
+            .from("policy_match_feedback")
+            .select("policy_id,created_at")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(5000);
+
+        if (normalizedPolicyIds.length > 0) {
+            query = query.in("policy_id", normalizedPolicyIds);
+        }
+
+        const { data, error } = await query;
+        if (error) {
+            logger.warn("Failed to read policy learning stats", { userId, error });
+            return {};
+        }
+
+        const stats: PolicyLearningStats = {};
+        for (const row of data ?? []) {
+            const policyId = typeof row.policy_id === "string" ? row.policy_id : "";
+            if (!policyId) continue;
+            const createdAt = typeof row.created_at === "string" ? row.created_at : null;
+            if (!stats[policyId]) {
+                stats[policyId] = { samples: 1, lastSampleAt: createdAt };
+                continue;
+            }
+            stats[policyId].samples += 1;
+            if (!stats[policyId].lastSampleAt && createdAt) {
+                stats[policyId].lastSampleAt = createdAt;
+            }
+        }
+
+        return stats;
+    }
+
     static async resolveLearnedCandidate(opts: {
         supabase: SupabaseClient;
         userId: string;
@@ -294,12 +370,32 @@ export class PolicyLearningService {
         filePath: string;
         baselineEntities: Record<string, unknown>;
         documentText?: string;
-    }): Promise<CandidatePolicy | null> {
+    }): Promise<LearnedCandidateResolution> {
         const { supabase, userId, policyIds, filePath, baselineEntities, documentText } = opts;
-        if (policyIds.length === 0) return null;
+        if (policyIds.length === 0) {
+            return {
+                candidate: null,
+                diagnostics: {
+                    reason: "no_policy_ids",
+                    evaluatedPolicies: 0,
+                    evaluatedSamples: 0,
+                    topCandidates: [],
+                },
+            };
+        }
 
         const docFeatures = buildFromDocInput({ filePath, baselineEntities, documentText });
-        if (docFeatures.tokens.length === 0) return null;
+        if (docFeatures.tokens.length === 0) {
+            return {
+                candidate: null,
+                diagnostics: {
+                    reason: "no_document_features",
+                    evaluatedPolicies: policyIds.length,
+                    evaluatedSamples: 0,
+                    topCandidates: [],
+                },
+            };
+        }
 
         const { data, error } = await supabase
             .from("policy_match_feedback")
@@ -311,13 +407,32 @@ export class PolicyLearningService {
 
         if (error) {
             logger.warn("Failed to read policy learning feedback", { userId, error });
-            return null;
+            return {
+                candidate: null,
+                diagnostics: {
+                    reason: "read_error",
+                    evaluatedPolicies: policyIds.length,
+                    evaluatedSamples: 0,
+                    topCandidates: [],
+                },
+            };
         }
 
         const rows = (data ?? []) as PolicyLearningRow[];
-        if (rows.length === 0) return null;
+        if (rows.length === 0) {
+            return {
+                candidate: null,
+                diagnostics: {
+                    reason: "no_feedback_samples",
+                    evaluatedPolicies: policyIds.length,
+                    evaluatedSamples: 0,
+                    topCandidates: [],
+                },
+            };
+        }
 
         const byPolicy = new Map<string, number[]>();
+        let validSamples = 0;
         for (const row of rows) {
             const sample = normalizeFeatures(row.features);
             if (!sample) continue;
@@ -325,9 +440,22 @@ export class PolicyLearningService {
             const existing = byPolicy.get(row.policy_id) ?? [];
             existing.push(score);
             byPolicy.set(row.policy_id, existing);
+            validSamples += 1;
         }
 
-        let best: CandidatePolicy | null = null;
+        if (byPolicy.size === 0) {
+            return {
+                candidate: null,
+                diagnostics: {
+                    reason: "no_valid_samples",
+                    evaluatedPolicies: policyIds.length,
+                    evaluatedSamples: validSamples,
+                    topCandidates: [],
+                },
+            };
+        }
+
+        const candidates: CandidatePolicyScore[] = [];
         for (const [policyId, scores] of byPolicy.entries()) {
             if (scores.length === 0) continue;
             scores.sort((a, b) => b - a);
@@ -335,28 +463,65 @@ export class PolicyLearningService {
             const averageTop = topScores.reduce((sum, value) => sum + value, 0) / topScores.length;
             const supportBoost = Math.min(0.08, (scores.length - 1) * 0.02);
             const score = clamp01(averageTop + supportBoost);
+            const support = scores.length;
+            const requiredScore = requiredScoreForSupport(support);
 
-            const candidate: CandidatePolicy = {
+            candidates.push({
                 policyId,
                 score,
-                support: scores.length,
-            };
-
-            if (!best || candidate.score > best.score) {
-                best = candidate;
-            }
+                support,
+                requiredScore,
+                accepted: score >= requiredScore,
+            });
         }
 
-        if (!best) return null;
+        candidates.sort((a, b) => b.score - a.score);
+        const best = candidates[0];
+        const topCandidates = candidates.slice(0, 3);
 
-        const strictEnough = best.support >= 2 ? best.score >= 0.72 : best.score >= 0.82;
-        if (!strictEnough) return null;
+        if (!best) {
+            return {
+                candidate: null,
+                diagnostics: {
+                    reason: "no_valid_samples",
+                    evaluatedPolicies: byPolicy.size,
+                    evaluatedSamples: validSamples,
+                    topCandidates: [],
+                },
+            };
+        }
+
+        if (!best.accepted) {
+            return {
+                candidate: null,
+                diagnostics: {
+                    reason: "score_below_threshold",
+                    evaluatedPolicies: byPolicy.size,
+                    evaluatedSamples: validSamples,
+                    bestCandidate: best,
+                    topCandidates,
+                },
+            };
+        }
 
         logger.info("Resolved learned policy candidate", {
             policyId: best.policyId,
             score: best.score,
             support: best.support,
         });
-        return best;
+        return {
+            candidate: {
+                policyId: best.policyId,
+                score: best.score,
+                support: best.support,
+            },
+            diagnostics: {
+                reason: "accepted",
+                evaluatedPolicies: byPolicy.size,
+                evaluatedSamples: validSamples,
+                bestCandidate: best,
+                topCandidates,
+            },
+        };
     }
 }
