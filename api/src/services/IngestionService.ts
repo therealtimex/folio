@@ -125,6 +125,7 @@ export class IngestionService {
         }
 
         const fieldLines = Object.entries(extracted)
+            .filter(([key]) => key !== "_enrichment")
             .map(([key, value]) => ({ key, value: this.valueToSemanticText(value).trim() }))
             .filter((entry) => entry.value.length > 0)
             .slice(0, 80)
@@ -137,12 +138,22 @@ export class IngestionService {
             lines.push("Extracted fields: none");
         }
 
+        const enrichment = extracted["_enrichment"];
+        if (enrichment && typeof enrichment === "object" && !Array.isArray(enrichment)) {
+            const enrichmentKeys = Object.keys(enrichment as Record<string, unknown>);
+            if (enrichmentKeys.length > 0) {
+                lines.push(`Enrichment fields: ${enrichmentKeys.join(", ")}`);
+            }
+        }
+
         lines.push("Synthetic semantic text generated from VLM output for retrieval.");
         return lines.join("\n");
     }
 
     private static countExtractedSemanticFields(extracted: Record<string, unknown>): number {
-        return Object.values(extracted)
+        return Object.entries(extracted)
+            .filter(([key]) => key !== "_enrichment")
+            .map(([, value]) => value)
             .map((value) => this.valueToSemanticText(value).trim())
             .filter((value) => value.length > 0).length;
     }

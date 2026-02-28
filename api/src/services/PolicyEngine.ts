@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createLogger } from "../utils/logger.js";
 import { SDKService } from "./SDKService.js";
 import { PolicyLoader } from "./PolicyLoader.js";
+import { GoogleSheetsService } from "./GoogleSheetsService.js";
 import { Actuator } from "../utils/Actuator.js";
 import { extractLlmResponse, normalizeLlmContent, previewLlmText } from "../utils/llmResponse.js";
 import type { FolioPolicy, MatchCondition, ExtractField } from "./PolicyLoader.js";
@@ -34,7 +35,7 @@ export interface TraceLog {
 export interface ProcessingResult {
     filePath: string;
     matchedPolicy: string | null;
-    extractedData: Record<string, string | number | null>;
+    extractedData: Record<string, unknown>;
     actionsExecuted: string[];
     status: "matched" | "fallback" | "error";
     error?: string;
@@ -102,12 +103,186 @@ type SynthesisTargetHints = {
     range?: string;
 };
 
+type SheetTemplateFieldHint = {
+    header: string;
+    key: string;
+    type: ExtractField["type"];
+};
+
+type SheetTemplateContext = {
+    spreadsheetReference: string;
+    spreadsheetId: string;
+    range: string;
+    headers: string[];
+    fields: SheetTemplateFieldHint[];
+};
+
 function hasText(value: unknown): value is string {
     return typeof value === "string" && value.trim().length > 0;
 }
 
 function stripTrailingPunctuation(value: string): string {
     return value.replace(/[),.;]+$/g, "");
+}
+
+function hasGidInReference(value: string | undefined): boolean {
+    return hasText(value) && /(?:[?#]gid=\d+)/i.test(value);
+}
+
+function isDefaultSheetOneRange(value: string | undefined): boolean {
+    if (!hasText(value)) return false;
+    const trimmed = value.trim();
+    const bang = trimmed.indexOf("!");
+    const sheetRef = (bang >= 0 ? trimmed.slice(0, bang) : trimmed).trim();
+    const normalized = /^'.*'$/.test(sheetRef)
+        ? sheetRef.slice(1, -1).replace(/''/g, "'").trim().toLowerCase()
+        : sheetRef.toLowerCase();
+    return normalized === "sheet1";
+}
+
+function shouldPreserveRangeHint(hints: SynthesisTargetHints): boolean {
+    if (!hasText(hints.range)) return false;
+    if (hasGidInReference(hints.sheetReference) && isDefaultSheetOneRange(hints.range)) {
+        return false;
+    }
+    return true;
+}
+
+function normalizeTemplateFieldKey(value: string): string {
+    const normalized = value
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "");
+    return normalized || "value";
+}
+
+function inferTemplateFieldType(header: string): ExtractField["type"] {
+    const normalized = normalizeTemplateFieldKey(header);
+    if (/(^|_)(date|due_date|invoice_date|receipt_date|service_date|posted_date)(_|$)/.test(normalized)) {
+        return "date";
+    }
+    if (/(^|_)(amount|total|subtotal|tax|price|cost|balance|fee|vat|discount|paid)(_|$)/.test(normalized)) {
+        return "currency";
+    }
+    if (/(^|_)(qty|quantity|count|units)(_|$)/.test(normalized)) {
+        return "number";
+    }
+    return "string";
+}
+
+function buildTemplateFieldHints(headers: string[]): SheetTemplateFieldHint[] {
+    const keyCounts = new Map<string, number>();
+
+    return headers.map((header) => {
+        const baseKey = normalizeTemplateFieldKey(header);
+        const seen = keyCounts.get(baseKey) ?? 0;
+        keyCounts.set(baseKey, seen + 1);
+        const key = seen === 0 ? baseKey : `${baseKey}_${seen + 1}`;
+        return {
+            header,
+            key,
+            type: inferTemplateFieldType(header),
+        };
+    });
+}
+
+async function resolveSheetTemplateContext(
+    hints: SynthesisTargetHints,
+    opts: { userId?: string; supabase?: SupabaseClient }
+): Promise<{ context?: SheetTemplateContext; warning?: string }> {
+    if (!hasText(hints.sheetReference) || !hasText(opts.userId)) {
+        return {};
+    }
+
+    const preferredRange = shouldPreserveRangeHint(hints) ? hints.range : undefined;
+    const templateResult = await GoogleSheetsService.resolveTemplate(
+        opts.userId,
+        hints.sheetReference,
+        preferredRange,
+        opts.supabase
+    );
+
+    if (!templateResult.success) {
+        return { warning: templateResult.error || "Failed to resolve Google Sheet template headers." };
+    }
+
+    const headers = (templateResult.headers ?? []).map((header) => header.trim()).filter(Boolean);
+    if (headers.length === 0) {
+        return { warning: "Google Sheet template has no headers in row 1." };
+    }
+
+    const fields = buildTemplateFieldHints(headers);
+    return {
+        context: {
+            spreadsheetReference: hints.sheetReference,
+            spreadsheetId: templateResult.spreadsheetId ?? hints.sheetReference,
+            range: templateResult.range ?? preferredRange ?? "Sheet1",
+            headers,
+            fields,
+        },
+    };
+}
+
+function applySheetTemplateContext(policy: FolioPolicy, template: SheetTemplateContext | undefined): FolioPolicy {
+    if (!template || !policy || typeof policy !== "object" || !policy.spec || typeof policy.spec !== "object") {
+        return policy;
+    }
+
+    const spec = policy.spec as { actions?: any[]; extract?: ExtractField[] };
+    if (!Array.isArray(spec.actions)) {
+        spec.actions = [];
+    }
+
+    const appendAction = spec.actions.find((action) => action?.type === "append_to_google_sheet");
+    if (appendAction) {
+        if (!hasText(appendAction.spreadsheet_id) && !hasText(appendAction.spreadsheet_url)) {
+            appendAction.spreadsheet_id = template.spreadsheetReference;
+        }
+        if (!hasText(appendAction.range) || isDefaultSheetOneRange(appendAction.range)) {
+            appendAction.range = template.range;
+        }
+    } else {
+        spec.actions.push({
+            type: "append_to_google_sheet",
+            spreadsheet_id: template.spreadsheetReference,
+            range: template.range,
+        });
+    }
+
+    const existingExtract = Array.isArray(spec.extract) ? spec.extract : [];
+    const existingByKey = new Map<string, ExtractField>();
+    for (const field of existingExtract) {
+        if (!field || typeof field.key !== "string") continue;
+        const key = normalizeTemplateFieldKey(field.key);
+        if (!existingByKey.has(key)) {
+            existingByKey.set(key, field);
+        }
+    }
+
+    const usedKeys = new Set<string>();
+    const orderedExtract = template.fields.map((templateField) => {
+        const existing = existingByKey.get(templateField.key);
+        usedKeys.add(templateField.key);
+        if (existing) {
+            return {
+                ...existing,
+                key: templateField.key,
+                type: existing.type ?? templateField.type,
+                description: existing.description?.trim() || `Extract value for Google Sheet column "${templateField.header}".`,
+            };
+        }
+
+        return {
+            key: templateField.key,
+            type: templateField.type,
+            description: `Extract value for Google Sheet column "${templateField.header}".`,
+        };
+    });
+
+    const extras = existingExtract.filter((field) => !usedKeys.has(normalizeTemplateFieldKey(field.key)));
+    spec.extract = [...orderedExtract, ...extras];
+
+    return policy;
 }
 
 function extractSynthesisTargetHints(description: string): SynthesisTargetHints {
@@ -173,18 +348,19 @@ function applySynthesisTargetHints(policy: FolioPolicy, hints: SynthesisTargetHi
 
     if (hasText(hints.sheetReference)) {
         const sheetAction = actions.find((action) => action?.type === "append_to_google_sheet");
+        const preserveRangeHint = shouldPreserveRangeHint(hints);
         if (sheetAction) {
             if (!hasText(sheetAction.spreadsheet_id) && !hasText(sheetAction.spreadsheet_url)) {
                 sheetAction.spreadsheet_id = hints.sheetReference;
             }
-            if (hasText(hints.range) && !hasText(sheetAction.range)) {
+            if (preserveRangeHint && !hasText(sheetAction.range)) {
                 sheetAction.range = hints.range;
             }
         } else {
             actions.push({
                 type: "append_to_google_sheet",
                 spreadsheet_id: hints.sheetReference,
-                ...(hasText(hints.range) ? { range: hints.range } : {}),
+                ...(preserveRangeHint ? { range: hints.range } : {}),
             });
         }
     }
@@ -355,7 +531,7 @@ async function extractData(
     doc: DocumentObject,
     trace: TraceLog[],
     settings: { llm_provider?: string; llm_model?: string } = {}
-): Promise<Record<string, string | number | null>> {
+): Promise<Record<string, unknown>> {
     const sdk = SDKService.getSDK();
     if (!sdk || fields.length === 0) return {};
     trace.push({ timestamp: new Date().toISOString(), step: "Starting data extraction", details: { fieldsCount: fields.length } });
@@ -422,7 +598,7 @@ ${fieldDescriptions}`;
             raw_length: raw.length,
             raw_preview: previewLlmText(raw),
         }, doc.supabase);
-        const parsed = parseLlmJson<Record<string, string | number | null>>(raw);
+        const parsed = parseLlmJson<Record<string, unknown>>(raw);
         if (parsed) {
             trace.push({ timestamp: new Date().toISOString(), step: "Data extracted successfully", details: { extractedKeys: Object.keys(parsed) } });
             Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Data Extraction", { action: "Data extracted successfully", extractedKeys: Object.keys(parsed), raw_response: parsed }, doc.supabase);
@@ -439,6 +615,207 @@ ${fieldDescriptions}`;
     }
 
     return {};
+}
+
+function valueToPromptPreview(value: unknown): string {
+    if (value == null) return "null";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
+}
+
+function hasMeaningfulValue(value: unknown): boolean {
+    if (value == null) return false;
+    if (typeof value === "string") return value.trim().length > 0;
+    if (typeof value === "number") return Number.isFinite(value);
+    if (typeof value === "boolean") return true;
+    if (Array.isArray(value)) return value.some((item) => hasMeaningfulValue(item));
+    if (typeof value === "object") return Object.values(value as Record<string, unknown>).some((item) => hasMeaningfulValue(item));
+    return true;
+}
+
+function removeDuplicateOrEmptyEnrichmentFields(
+    enrichment: Record<string, unknown>,
+    contractData: Record<string, unknown>
+): Record<string, unknown> {
+    const existingKeys = new Set(Object.keys(contractData).map((key) => normalizeTemplateFieldKey(key)));
+    const cleaned: Record<string, unknown> = {};
+
+    for (const [key, value] of Object.entries(enrichment)) {
+        const normalizedKey = normalizeTemplateFieldKey(key);
+        if (existingKeys.has(normalizedKey)) continue;
+        if (!hasMeaningfulValue(value)) continue;
+        cleaned[key] = value;
+    }
+
+    return cleaned;
+}
+
+async function extractEnrichmentData(
+    doc: DocumentObject,
+    contractData: Record<string, unknown>,
+    trace: TraceLog[],
+    settings: { llm_provider?: string; llm_model?: string } = {}
+): Promise<Record<string, unknown>> {
+    const sdk = SDKService.getSDK();
+    if (!sdk || Object.keys(contractData).length === 0) return {};
+
+    const { provider, model } = await SDKService.resolveChatProvider(settings);
+    const knownBlock = Object.entries(contractData)
+        .slice(0, 80)
+        .map(([key, value]) => `- "${key}": ${valueToPromptPreview(value).slice(0, 300)}`)
+        .join("\n");
+
+    const prompt = `You already extracted the core template fields below.
+Return ONLY a valid JSON object with ADDITIONAL useful fields found in the document (do not repeat existing keys).
+
+Already extracted fields:
+${knownBlock || "- none"}
+
+Add only high-confidence extra signals useful for downstream automation or analytics, such as:
+- line_items: array of { description, quantity, unit_price, total }
+- tax_breakdown, discounts, payment_details
+- merchant_metadata, customer_metadata
+- notes or compliance identifiers
+
+Rules:
+- Return {} if no reliable extras exist.
+- Keep keys in snake_case.
+- Do not overwrite or repeat existing keys.
+- JSON only. No markdown or explanations.`;
+
+    try {
+        trace.push({
+            timestamp: new Date().toISOString(),
+            step: "LLM request (enrichment extraction)",
+            details: {
+                provider,
+                model,
+                known_fields_count: Object.keys(contractData).length,
+            },
+        });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Data Extraction", {
+            action: "LLM request (enrichment extraction)",
+            provider,
+            model,
+            known_fields_count: Object.keys(contractData).length,
+        }, doc.supabase);
+
+        const isVlmPayload = doc.text.startsWith("[VLM_IMAGE_DATA:");
+        const mixedPrompt = isVlmPayload
+            ? `You are a precise data extraction engine. Return only valid JSON.\n\n${prompt}`
+            : prompt;
+        const result = await sdk.llm.chat(
+            isVlmPayload
+                ? [{ role: "user", content: buildMessageContent(mixedPrompt, doc.text) }] as any
+                : [
+                    { role: "system", content: "You are a precise data extraction engine. Return only valid JSON." },
+                    { role: "user", content: buildMessageContent(prompt, doc.text) },
+                ] as any,
+            { provider, model }
+        );
+
+        const raw = extractLlmResponse(result);
+        trace.push({
+            timestamp: new Date().toISOString(),
+            step: "LLM response (enrichment extraction)",
+            details: {
+                provider,
+                model,
+                raw_length: raw.length,
+                raw_preview: previewLlmText(raw),
+            },
+        });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Data Extraction", {
+            action: "LLM response (enrichment extraction)",
+            provider,
+            model,
+            raw_length: raw.length,
+            raw_preview: previewLlmText(raw),
+        }, doc.supabase);
+
+        const parsed = parseLlmJson<Record<string, unknown>>(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            trace.push({
+                timestamp: new Date().toISOString(),
+                step: "Enrichment extraction skipped",
+                details: { reason: "Unparseable enrichment JSON" },
+            });
+            return {};
+        }
+
+        const cleaned = removeDuplicateOrEmptyEnrichmentFields(parsed, contractData);
+        trace.push({
+            timestamp: new Date().toISOString(),
+            step: "Enrichment extraction complete",
+            details: {
+                extracted_keys: Object.keys(cleaned),
+                extracted_count: Object.keys(cleaned).length,
+            },
+        });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Data Extraction", {
+            action: "Enrichment extraction complete",
+            extracted_keys: Object.keys(cleaned),
+            extracted_count: Object.keys(cleaned).length,
+        }, doc.supabase);
+        return cleaned;
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        trace.push({
+            timestamp: new Date().toISOString(),
+            step: "Enrichment extraction failed",
+            details: { error: msg },
+        });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", {
+            action: "Enrichment extraction failed",
+            error: msg,
+        }, doc.supabase);
+        return {};
+    }
+}
+
+function attachEnrichment(
+    contractData: Record<string, unknown>,
+    enrichment: Record<string, unknown>
+): Record<string, unknown> {
+    if (Object.keys(enrichment).length === 0) {
+        return contractData;
+    }
+
+    return {
+        ...contractData,
+        _enrichment: enrichment,
+    };
+}
+
+function toActionData(data: Record<string, unknown>): Record<string, string | number | null> {
+    const normalized: Record<string, string | number | null> = {};
+
+    for (const [key, value] of Object.entries(data)) {
+        if (value == null) {
+            normalized[key] = null;
+            continue;
+        }
+        if (typeof value === "string" || typeof value === "number") {
+            normalized[key] = value;
+            continue;
+        }
+        if (typeof value === "boolean") {
+            normalized[key] = value ? "true" : "false";
+            continue;
+        }
+        try {
+            normalized[key] = JSON.stringify(value);
+        } catch {
+            normalized[key] = String(value);
+        }
+    }
+
+    return normalized;
 }
 
 // ─── Engine ──────────────────────────────────────────────────────────────────
@@ -463,6 +840,11 @@ export class PolicyEngine {
 
                 // Extract data
                 const extractedData = await extractData(policy.spec.extract ?? [], doc, globalTrace, settings);
+                const hasSheetAppendAction = (policy.spec.actions ?? []).some((action) => action.type === "append_to_google_sheet");
+                const enrichmentData = hasSheetAppendAction
+                    ? await extractEnrichmentData(doc, extractedData, globalTrace, settings)
+                    : {};
+                const extractedForStorage = attachEnrichment(extractedData, enrichmentData);
 
                 // Validate required fields
                 const missingRequired = (policy.spec.extract ?? [])
@@ -476,7 +858,7 @@ export class PolicyEngine {
                     return {
                         filePath: doc.filePath,
                         matchedPolicy: policy.metadata.id,
-                        extractedData,
+                        extractedData: extractedForStorage,
                         actionsExecuted: [],
                         status: "error",
                         error: `Missing required fields: ${missingRequired.join(", ")}`,
@@ -491,7 +873,7 @@ export class PolicyEngine {
                     doc.ingestionId,
                     doc.userId,
                     policy.spec.actions ?? [],
-                    { ...baselineEntities, ...extractedData } as Record<string, string | number | null>,
+                    toActionData({ ...baselineEntities, ...extractedData }),
                     { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
                     policy.spec.extract ?? [],
                     doc.supabase
@@ -504,7 +886,7 @@ export class PolicyEngine {
                         ? doc.filePath
                         : doc.filePath,
                     matchedPolicy: policy.metadata.id,
-                    extractedData,
+                    extractedData: extractedForStorage,
                     actionsExecuted: actuatorResult.actionsExecuted,
                     status: "matched",
                     error: actuatorResult.errors[0],
@@ -545,6 +927,11 @@ export class PolicyEngine {
 
                 logger.info(`Matched policy: ${policy.metadata.id}`);
                 const extractedData = await extractData(policy.spec.extract ?? [], doc, globalTrace, settings);
+                const hasSheetAppendAction = (policy.spec.actions ?? []).some((action) => action.type === "append_to_google_sheet");
+                const enrichmentData = hasSheetAppendAction
+                    ? await extractEnrichmentData(doc, extractedData, globalTrace, settings)
+                    : {};
+                const extractedForStorage = attachEnrichment(extractedData, enrichmentData);
 
                 const missingRequired = (policy.spec.extract ?? [])
                     .filter((f) => f.required && extractedData[f.key] == null)
@@ -556,7 +943,7 @@ export class PolicyEngine {
                     return {
                         filePath: doc.filePath,
                         matchedPolicy: policy.metadata.id,
-                        extractedData,
+                        extractedData: extractedForStorage,
                         actionsExecuted: [],
                         status: "error",
                         error: `Missing required fields: ${missingRequired.join(", ")}`,
@@ -568,7 +955,7 @@ export class PolicyEngine {
                     doc.ingestionId,
                     doc.userId,
                     policy.spec.actions ?? [],
-                    { ...baselineEntities, ...extractedData } as Record<string, string | number | null>,
+                    toActionData({ ...baselineEntities, ...extractedData }),
                     { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
                     policy.spec.extract ?? [],
                     doc.supabase
@@ -579,7 +966,7 @@ export class PolicyEngine {
                 return {
                     filePath: doc.filePath,
                     matchedPolicy: policy.metadata.id,
-                    extractedData,
+                    extractedData: extractedForStorage,
                     actionsExecuted: actuatorResult.actionsExecuted,
                     status: "matched",
                     error: actuatorResult.errors[0],
@@ -832,6 +1219,34 @@ Rules:
         const model = opts.model || defaults.model;
         logger.info(`Synthesizing policy via ${provider}/${model}`);
         const targetHints = extractSynthesisTargetHints(description);
+        const synthesisWarnings: string[] = [];
+
+        let sheetTemplateContext: SheetTemplateContext | undefined;
+        if (hasText(targetHints.sheetReference) && hasText(opts.userId)) {
+            try {
+                const templateResolution = await resolveSheetTemplateContext(targetHints, {
+                    userId: opts.userId,
+                    supabase: opts.supabase,
+                });
+                sheetTemplateContext = templateResolution.context;
+                if (templateResolution.warning) {
+                    synthesisWarnings.push(`Google Sheet template note: ${templateResolution.warning}`);
+                }
+                if (sheetTemplateContext && opts.userId) {
+                    Actuator.logEvent(null, opts.userId, "analysis", "Policy Synthesis", {
+                        action: "Resolved Google Sheet template for synthesis",
+                        spreadsheet_id: sheetTemplateContext.spreadsheetId,
+                        range: sheetTemplateContext.range,
+                        headers_count: sheetTemplateContext.headers.length,
+                        headers: sheetTemplateContext.headers,
+                    }, opts.supabase);
+                }
+            } catch (templateErr) {
+                const templateMsg = templateErr instanceof Error ? templateErr.message : String(templateErr);
+                synthesisWarnings.push(`Google Sheet template note: ${templateMsg}`);
+                logger.warn("Failed to resolve Google Sheet template for synthesis", { error: templateErr });
+            }
+        }
 
         const systemPrompt = `You are a Folio Policy Engine expert. Convert natural language descriptions into a valid FolioPolicy JSON object.
 
@@ -850,18 +1265,42 @@ Return ONLY a valid JSON object with this exact shape (no markdown, no backticks
 Supported action types include:
 - copy, rename, auto_rename, copy_to_gdrive, append_to_google_sheet, log_csv, notify, webhook
 - For append_to_google_sheet use:
-  { "type": "append_to_google_sheet", "spreadsheet_id": "<sheet-id-or-url>", "range": "Sheet1!A:Z", "columns": ["{date}","{issuer}"] }
+  { "type": "append_to_google_sheet", "spreadsheet_id": "<sheet-id-or-url>", "columns": ["{date}","{issuer}"] }
 - columns is optional; if omitted, runtime auto-maps extracted fields to sheet headers dynamically.
-- Never omit user-provided external targets (folder IDs, spreadsheet URLs/IDs, ranges); preserve them exactly in actions.`;
+- range is optional; only include it when user explicitly requires a specific tab/range.
+- If spreadsheet_id is a Google Sheets URL with gid, omit range unless user explicitly provided one.
+- Never omit user-provided external targets (folder IDs, spreadsheet URLs/IDs); preserve explicit ranges unless the provided range is only a generic Sheet1 fallback alongside a gid URL.`;
+
+        const preserveRangeHint = shouldPreserveRangeHint(targetHints);
+        const sheetTemplateFieldsPreview = sheetTemplateContext
+            ? sheetTemplateContext.fields
+                .slice(0, 40)
+                .map((field) => `  - "${field.header}" -> key "${field.key}" (${field.type})`)
+                .join("\n")
+            : "";
+        const hasMoreTemplateFields = !!sheetTemplateContext && sheetTemplateContext.fields.length > 40;
+
+        const sheetTemplateGuidanceBlock = sheetTemplateContext
+            ? `\n\nGoogle Sheet template context (authoritative for this policy):
+- spreadsheet_id: ${sheetTemplateContext.spreadsheetReference}
+- resolved range: ${sheetTemplateContext.range}
+- headers (${sheetTemplateContext.fields.length}):
+${sheetTemplateFieldsPreview}${hasMoreTemplateFields ? "\n  - ... (truncated)" : ""}
+
+When template context is present:
+- Ensure spec.extract includes keys for these headers (same key names as listed).
+- Keep append_to_google_sheet action targeting this spreadsheet_id.
+- Use range "${sheetTemplateContext.range}" unless the user explicitly asks for a different valid range.`
+            : "";
 
         const targetHintsBlock = [
             hasText(targetHints.driveFolderId) ? `- Google Drive Folder ID: ${targetHints.driveFolderId}` : null,
             hasText(targetHints.sheetReference) ? `- Google Sheet: ${targetHints.sheetReference}` : null,
-            hasText(targetHints.range) ? `- Preferred range: ${targetHints.range}` : null,
+            preserveRangeHint ? `- Preferred range: ${targetHints.range}` : null,
         ].filter(Boolean).join("\n");
 
         const synthesisRequest = targetHintsBlock
-            ? `Create a policy for: ${description}\n\nRequired target values to preserve exactly:\n${targetHintsBlock}`
+            ? `Create a policy for: ${description}\n\nRequired target values to preserve exactly:\n${targetHintsBlock}${sheetTemplateGuidanceBlock}`
             : `Create a policy for: ${description}`;
 
         try {
@@ -909,15 +1348,20 @@ Supported action types include:
                 return { policy: null, error: "LLM response was not valid JSON", raw };
             }
 
-            const repaired = applySynthesisTargetHints(parsed, targetHints);
+            let repaired = applySynthesisTargetHints(parsed, targetHints);
+            repaired = applySheetTemplateContext(repaired, sheetTemplateContext);
 
             if (PolicyLoader.validate(repaired)) {
-                return { policy: repaired };
+                return {
+                    policy: repaired,
+                    ...(synthesisWarnings.length > 0 ? { error: synthesisWarnings.join(" ") } : {}),
+                };
             }
 
             // Return as draft even if validation fails — let the UI show a preview
             logger.warn("Synthesized policy failed strict validation, returning as draft");
-            return { policy: repaired, error: "Policy schema may be incomplete — please review before saving" };
+            synthesisWarnings.push("Policy schema may be incomplete — please review before saving");
+            return { policy: repaired, error: synthesisWarnings.join(" ") };
 
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

@@ -6,17 +6,17 @@ import { GoogleDriveService } from "../../services/GoogleDriveService.js";
 
 export class CopyToGDriveAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
-        const { action, file, variables, userId, ingestionId, supabase } = context;
+        const { action, file, variables, data, userId, ingestionId, supabase } = context;
         const destination = pickString(action as any, "destination");
         const filenameConfig = pickString(action as any, "filename");
 
-        const destDirId = destination ? interpolate(destination, variables) : undefined;
+        const destDirId = destination ? interpolate(destination, variables, data) : undefined;
 
         let resolvedFileName: string | undefined;
         if (filenameConfig) {
             const ext = path.extname(file.name);
             const stem = file.name.slice(0, file.name.length - ext.length);
-            resolvedFileName = resolveFilename(filenameConfig, variables, stem, ext);
+            resolvedFileName = resolveFilename(filenameConfig, variables, stem, ext, data);
         }
 
         const uploadResult = await GoogleDriveService.uploadFile(userId, file.path, destDirId, supabase, resolvedFileName);

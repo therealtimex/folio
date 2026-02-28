@@ -52,13 +52,26 @@ function buildComposeDescription(ing: Ingestion): string {
         parts.push(`I have a document named "${ing.filename}" that matched a policy, but I want to create a better, more specific policy for it.`);
     }
     if (ing.mime_type) parts.push(`It is a ${ing.mime_type} file.`);
-    const extracted = ing.extracted ? Object.entries(ing.extracted).filter(([, v]) => v != null) : [];
+    const extracted = ing.extracted
+        ? Object.entries(ing.extracted).filter(([key, v]) => key !== "_enrichment" && v != null)
+        : [];
     if (extracted.length > 0) {
         const fieldSummary = extracted.map(([k, v]) => `${k}: ${String(v)}`).join(", ");
         parts.push(`Partial data already extracted: ${fieldSummary}.`);
     }
     parts.push("Create a policy to handle this exact type of document — infer the document type, define strict match conditions, extract key fields, and route it to an appropriate folder.");
     return parts.join(" ");
+}
+
+function formatExtractedValue(value: unknown): string {
+    if (value == null) return "null";
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return String(value);
+    }
 }
 
 // Chips for the most important extracted fields
@@ -156,6 +169,9 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string
 
 export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsChange, onComposePolicy }: Props) {
     const extracted = ing.extracted && Object.keys(ing.extracted).length > 0 ? ing.extracted : null;
+    const enrichment = extracted && typeof extracted["_enrichment"] === "object" && extracted["_enrichment"] !== null
+        ? extracted["_enrichment"] as Record<string, unknown>
+        : null;
     const actions = ing.actions_taken?.length ? ing.actions_taken : null;
 
     // ─── Summary state ────────────────────────────────────────────────────────
@@ -278,10 +294,27 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                         <div>
                             <SectionLabel>Extracted Data</SectionLabel>
                             <div className="rounded-xl border overflow-hidden">
-                                {Object.entries(extracted).map(([key, val]) => (
+                                {Object.entries(extracted)
+                                    .filter(([key]) => key !== "_enrichment")
+                                    .map(([key, val]) => (
                                     <div key={key} className="flex items-center justify-between px-4 py-2 text-xs border-b last:border-0">
                                         <span className="font-mono text-muted-foreground">{key}</span>
-                                        <span className="font-medium text-right max-w-[55%] truncate">{String(val)}</span>
+                                        <span className="font-medium text-right max-w-[55%] truncate">{formatExtractedValue(val)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Enrichment Data */}
+                    {enrichment && Object.keys(enrichment).length > 0 && (
+                        <div>
+                            <SectionLabel>Enrichment Data</SectionLabel>
+                            <div className="rounded-xl border overflow-hidden">
+                                {Object.entries(enrichment).map(([key, val]) => (
+                                    <div key={key} className="px-4 py-2 text-xs border-b last:border-0">
+                                        <div className="font-mono text-muted-foreground mb-1">{key}</div>
+                                        <pre className="font-medium whitespace-pre-wrap break-all">{formatExtractedValue(val)}</pre>
                                     </div>
                                 ))}
                             </div>

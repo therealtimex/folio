@@ -27,6 +27,7 @@ type ResolveTemplateResult = {
     spreadsheetId?: string;
     range?: string;
     headers?: string[];
+    headerDropdowns?: Array<TemplateHeaderDropdown | null>;
 };
 
 type ParsedSpreadsheetReference = {
@@ -91,6 +92,29 @@ type ParsedGoogleApiError = {
 
 type ParsedGoogleErrorResponse = {
     error?: ParsedGoogleApiError;
+};
+
+type GoogleDataValidationConditionValue = {
+    userEnteredValue?: string;
+};
+
+type GoogleDataValidationCondition = {
+    type?: string;
+    values?: GoogleDataValidationConditionValue[];
+};
+
+type GoogleDataValidationRule = {
+    condition?: GoogleDataValidationCondition;
+    strict?: boolean;
+};
+
+type GoogleCellData = {
+    dataValidation?: GoogleDataValidationRule;
+};
+
+type TemplateHeaderDropdown = {
+    strict: boolean;
+    allowedValues: string[];
 };
 
 function parseCredentials(value: unknown): IntegrationCredentials {
@@ -174,9 +198,58 @@ function extractSheetRef(range: string): string | null {
     return trimmed;
 }
 
+function normalizeSheetRefForComparison(value: string): string {
+    const trimmed = value.trim();
+    if (/^'.*'$/.test(trimmed)) {
+        return trimmed.slice(1, -1).replace(/''/g, "'").trim().toLowerCase();
+    }
+    return trimmed.toLowerCase();
+}
+
+function isDefaultSheetRef(sheetRef: string): boolean {
+    return normalizeSheetRefForComparison(sheetRef) === "sheet1";
+}
+
+function applySheetRefToRange(range: string, sheetRef: string): string {
+    const trimmed = range.trim();
+    if (!trimmed) return sheetRef;
+
+    const bang = trimmed.indexOf("!");
+    if (bang >= 0) {
+        const tail = trimmed.slice(bang + 1).trim();
+        return tail ? `${sheetRef}!${tail}` : sheetRef;
+    }
+
+    if (isA1CoordinateRange(trimmed)) {
+        return `${sheetRef}!${trimmed}`;
+    }
+
+    return sheetRef;
+}
+
+function shouldUseGidSheetRef(range: string): boolean {
+    const sheetRef = extractSheetRef(range);
+    if (!sheetRef) return true;
+    return isDefaultSheetRef(sheetRef);
+}
+
 function buildHeaderRange(range: string): string {
     const sheetRef = extractSheetRef(range);
     return sheetRef ? `${sheetRef}!1:1` : "1:1";
+}
+
+function toA1ColumnLabel(index: number): string {
+    let n = Math.max(0, Math.floor(index));
+    let label = "";
+    do {
+        label = String.fromCharCode(65 + (n % 26)) + label;
+        n = Math.floor(n / 26) - 1;
+    } while (n >= 0);
+    return label;
+}
+
+function normalizeDropdownOption(value: string): string {
+    return value.trim().toLowerCase();
 }
 
 export class GoogleSheetsService {
@@ -384,7 +457,9 @@ export class GoogleSheetsService {
         return undefined;
     }
 
-    private static buildRemediation(reason?: string, activationUrl?: string): GoogleSheetsRemediation | undefined {
+    private static buildRemediation(reason?: string, activationUrl?: string, message?: string): GoogleSheetsRemediation | undefined {
+        const normalizedMessage = typeof message === "string" ? message.toLowerCase() : "";
+
         if (reason === "SERVICE_DISABLED") {
             const links: GoogleSheetsHelpLink[] = [];
             if (activationUrl) {
@@ -404,6 +479,23 @@ export class GoogleSheetsService {
             };
         }
 
+        if (
+            (reason === "PERMISSION_DENIED" || reason === "FAILED_PRECONDITION") &&
+            /(protected|cannot edit|not have permission|insufficient permissions|permission)/.test(normalizedMessage)
+        ) {
+            return {
+                provider: "google_sheets",
+                code: reason,
+                title: "Google Sheets write access is blocked for this tab or range.",
+                summary: "The connected account can read the sheet but cannot write to the target cells.",
+                steps: [
+                    "Share the sheet with the connected Google account as Editor.",
+                    "If the tab/range is protected, allow this account to edit it or remove protection.",
+                    "Retry the ingestion after permissions update.",
+                ],
+            };
+        }
+
         if (reason === "PERMISSION_DENIED" || reason === "ACCESS_TOKEN_SCOPE_INSUFFICIENT") {
             return {
                 provider: "google_sheets",
@@ -414,6 +506,37 @@ export class GoogleSheetsService {
                     "Share the target Google Sheet with the connected Google account as Editor.",
                     "If permissions were just changed, retry the ingestion.",
                     "If it still fails, reconnect Google Drive/Sheets integration to refresh scopes.",
+                ],
+            };
+        }
+
+        if (
+            reason === "INVALID_ARGUMENT" &&
+            /(data validation|must be one of|invalid value at 'data\.values|dropdown)/.test(normalizedMessage)
+        ) {
+            return {
+                provider: "google_sheets",
+                code: reason,
+                title: "Google Sheets rejected one or more values due to dropdown validation.",
+                summary: "A strict dropdown column received a value outside the allowed list.",
+                steps: [
+                    "Open the sheet and check the dropdown options for the target tab.",
+                    "Update policy extraction/mapping so values match allowed dropdown choices exactly.",
+                    "If the dropdown is meant for humans only, leave that column unmapped so Folio appends blank and a human can select it.",
+                ],
+            };
+        }
+
+        if (reason === "INVALID_ARGUMENT" && /unable to parse range/i.test(normalizedMessage)) {
+            return {
+                provider: "google_sheets",
+                code: reason,
+                title: "Google Sheets range is invalid for this spreadsheet tab.",
+                summary: "The configured range points to a tab name that does not exist.",
+                steps: [
+                    "Set range to the exact tab name (for example: 'Receipts' or 'Receipts!A:Z').",
+                    "If your spreadsheet URL includes #gid=..., you can omit range and Folio will resolve the tab automatically.",
+                    "Retry the ingestion after updating the policy.",
                 ],
             };
         }
@@ -458,12 +581,12 @@ export class GoogleSheetsService {
                 errorDetails.activationUrl = activationUrl;
             }
 
-            const message = apiError?.message;
-            if (typeof message === "string" && message.trim().length > 0) {
-                errorMessage = `Google Sheets Error: ${message}`;
+            const apiMessage = apiError?.message;
+            if (typeof apiMessage === "string" && apiMessage.trim().length > 0) {
+                errorMessage = `Google Sheets Error: ${apiMessage}`;
             }
 
-            const remediation = this.buildRemediation(reason ?? apiError?.status, activationUrl);
+            const remediation = this.buildRemediation(reason ?? apiError?.status, activationUrl, apiMessage);
             if (remediation) {
                 errorDetails.remediation = remediation;
             }
@@ -509,6 +632,198 @@ export class GoogleSheetsService {
         return toSheetRef(title);
     }
 
+    private static extractDropdownValidation(rule?: GoogleDataValidationRule): {
+        strict: boolean;
+        allowedValues: string[];
+        rangeRef?: string;
+    } | null {
+        if (!rule?.condition?.type) return null;
+
+        const conditionType = rule.condition.type.trim().toUpperCase();
+        if (conditionType !== "ONE_OF_LIST" && conditionType !== "ONE_OF_RANGE") {
+            return null;
+        }
+
+        const conditionValues = Array.isArray(rule.condition.values) ? rule.condition.values : [];
+        const strict = rule.strict === true;
+
+        if (conditionType === "ONE_OF_LIST") {
+            const allowedValues = conditionValues
+                .map((entry) => (typeof entry.userEnteredValue === "string" ? entry.userEnteredValue.trim() : ""))
+                .filter((entry) => entry.length > 0);
+            return { strict, allowedValues };
+        }
+
+        const rawRange = conditionValues
+            .map((entry) => (typeof entry.userEnteredValue === "string" ? entry.userEnteredValue.trim() : ""))
+            .find(Boolean);
+        if (!rawRange) {
+            return { strict, allowedValues: [] };
+        }
+
+        const rangeRef = rawRange.startsWith("=") ? rawRange.slice(1).trim() : rawRange;
+        return { strict, allowedValues: [], rangeRef };
+    }
+
+    private static async readDropdownOptionsFromRange(
+        context: SheetsAuthContext,
+        spreadsheetId: string,
+        rangeRef: string
+    ): Promise<string[]> {
+        const normalizedRange = rangeRef.trim();
+        if (!normalizedRange) return [];
+
+        const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}/values/${encodeURIComponent(normalizedRange)}?majorDimension=ROWS`;
+        const requestResult = await this.requestWithRetry(context, (token) =>
+            fetch(endpoint, {
+                method: "GET",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            })
+        );
+
+        if (requestResult.error || !requestResult.response) {
+            logger.warn("Failed to resolve Google Sheets dropdown options from range", {
+                spreadsheetId,
+                rangeRef: normalizedRange,
+                error: requestResult.error,
+            });
+            return [];
+        }
+
+        if (!requestResult.response.ok) {
+            logger.warn("Google Sheets dropdown options range request failed", {
+                spreadsheetId,
+                rangeRef: normalizedRange,
+                status: requestResult.response.status,
+            });
+            return [];
+        }
+
+        const payload = await requestResult.response.json() as { values?: unknown[][] };
+        const rows = Array.isArray(payload.values) ? payload.values : [];
+        const seen = new Set<string>();
+        const options: string[] = [];
+
+        for (const row of rows) {
+            if (!Array.isArray(row)) continue;
+            for (const cell of row) {
+                const value = String(cell ?? "").trim();
+                if (!value) continue;
+                const key = normalizeDropdownOption(value);
+                if (seen.has(key)) continue;
+                seen.add(key);
+                options.push(value);
+            }
+        }
+
+        return options;
+    }
+
+    private static async resolveHeaderDropdowns(
+        context: SheetsAuthContext,
+        spreadsheetId: string,
+        range: string,
+        headerCount: number
+    ): Promise<Array<TemplateHeaderDropdown | null>> {
+        if (headerCount <= 0) return [];
+
+        const sheetRef = extractSheetRef(range);
+        if (!sheetRef) return new Array(headerCount).fill(null);
+
+        const lastColumn = toA1ColumnLabel(headerCount - 1);
+        const gridRange = `${sheetRef}!A1:${lastColumn}2`;
+        const endpoint =
+            `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(spreadsheetId)}` +
+            `?includeGridData=true&ranges=${encodeURIComponent(gridRange)}` +
+            "&fields=sheets(data(rowData(values(dataValidation))))";
+
+        const requestResult = await this.requestWithRetry(context, (token) =>
+            fetch(endpoint, {
+                method: "GET",
+                headers: {
+                    Authorization: `Bearer ${token}`,
+                },
+            })
+        );
+
+        if (requestResult.error || !requestResult.response) {
+            logger.warn("Failed to read Google Sheets dropdown validations", {
+                spreadsheetId,
+                range: gridRange,
+                error: requestResult.error,
+            });
+            return new Array(headerCount).fill(null);
+        }
+
+        if (!requestResult.response.ok) {
+            logger.warn("Google Sheets dropdown validation metadata request failed", {
+                spreadsheetId,
+                range: gridRange,
+                status: requestResult.response.status,
+            });
+            return new Array(headerCount).fill(null);
+        }
+
+        const payload = await requestResult.response.json() as {
+            sheets?: Array<{
+                data?: Array<{
+                    rowData?: Array<{
+                        values?: GoogleCellData[];
+                    }>;
+                }>;
+            }>;
+        };
+
+        const rowData = payload.sheets?.[0]?.data?.[0]?.rowData ?? [];
+        const headerRow = Array.isArray(rowData?.[0]?.values) ? rowData[0].values : [];
+        const exampleDataRow = Array.isArray(rowData?.[1]?.values) ? rowData[1].values : [];
+
+        const dropdowns: Array<TemplateHeaderDropdown | null> = new Array(headerCount).fill(null);
+        const pendingRangeLookups = new Map<number, { strict: boolean; rangeRef: string }>();
+        const rangeCache = new Map<string, string[]>();
+
+        for (let i = 0; i < headerCount; i += 1) {
+            const rule =
+                exampleDataRow[i]?.dataValidation ??
+                headerRow[i]?.dataValidation;
+            const dropdown = this.extractDropdownValidation(rule);
+            if (!dropdown) continue;
+
+            if (dropdown.allowedValues.length > 0) {
+                dropdowns[i] = {
+                    strict: dropdown.strict,
+                    allowedValues: dropdown.allowedValues,
+                };
+                continue;
+            }
+
+            if (dropdown.rangeRef) {
+                pendingRangeLookups.set(i, {
+                    strict: dropdown.strict,
+                    rangeRef: dropdown.rangeRef,
+                });
+            }
+        }
+
+        for (const [columnIndex, pending] of pendingRangeLookups.entries()) {
+            if (!rangeCache.has(pending.rangeRef)) {
+                const options = await this.readDropdownOptionsFromRange(context, spreadsheetId, pending.rangeRef);
+                rangeCache.set(pending.rangeRef, options);
+            }
+            const allowedValues = rangeCache.get(pending.rangeRef) ?? [];
+            if (allowedValues.length > 0) {
+                dropdowns[columnIndex] = {
+                    strict: pending.strict,
+                    allowedValues,
+                };
+            }
+        }
+
+        return dropdowns;
+    }
+
     private static async resolveSheetTarget(
         context: SheetsAuthContext,
         spreadsheetReference: string,
@@ -520,11 +835,22 @@ export class GoogleSheetsService {
         }
 
         let range = preferredRange?.trim();
-        if (!range && parsed.gid !== undefined) {
-            const gidRange = await this.resolveSheetRangeFromGid(context, parsed.spreadsheetId, parsed.gid);
-            if (gidRange) {
-                range = gidRange;
-            } else {
+        if (parsed.gid !== undefined) {
+            const gidSheetRef = await this.resolveSheetRangeFromGid(context, parsed.spreadsheetId, parsed.gid);
+            if (gidSheetRef) {
+                if (!range) {
+                    range = gidSheetRef;
+                } else if (shouldUseGidSheetRef(range)) {
+                    const originalRange = range;
+                    range = applySheetRefToRange(range, gidSheetRef);
+                    logger.info("Adjusted Google Sheets range using gid-resolved tab", {
+                        spreadsheetId: parsed.spreadsheetId,
+                        gid: parsed.gid,
+                        originalRange,
+                        resolvedRange: range,
+                    });
+                }
+            } else if (!range) {
                 return {
                     success: false,
                     error: "Could not resolve sheet tab from URL gid. Provide an explicit range like 'Sheet1!A:Z'.",
@@ -557,16 +883,22 @@ export class GoogleSheetsService {
             return { success: false, error: targetResult.error };
         }
 
-        const headerRange = buildHeaderRange(targetResult.range);
-        const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(targetResult.spreadsheetId)}/values/${encodeURIComponent(headerRange)}?majorDimension=ROWS`;
-        const requestResult = await this.requestWithRetry(authResult.context, (token) =>
-            fetch(endpoint, {
-                method: "GET",
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                },
-            })
-        );
+        const parsedReference = parseSpreadsheetReference(spreadsheetReference);
+        const requestHeaders = async (rangeToRead: string) => {
+            const headerRange = buildHeaderRange(rangeToRead);
+            const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(targetResult.spreadsheetId)}/values/${encodeURIComponent(headerRange)}?majorDimension=ROWS`;
+            return this.requestWithRetry(authResult.context, (token) =>
+                fetch(endpoint, {
+                    method: "GET",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                    },
+                })
+            );
+        };
+
+        let resolvedRange = targetResult.range;
+        const requestResult = await requestHeaders(resolvedRange);
 
         if (requestResult.error || !requestResult.response) {
             return { success: false, error: requestResult.error ?? "Failed to read Google Sheet template." };
@@ -574,6 +906,58 @@ export class GoogleSheetsService {
 
         if (!requestResult.response.ok) {
             const parsedError = await this.parseApiError(requestResult.response, "Template read failed");
+            const isRangeParseError =
+                parsedError.errorDetails.googleStatus === "INVALID_ARGUMENT" &&
+                /unable to parse range/i.test(parsedError.message);
+
+            if (parsedReference?.gid !== undefined && isRangeParseError) {
+                const gidSheetRef = await this.resolveSheetRangeFromGid(
+                    authResult.context,
+                    targetResult.spreadsheetId,
+                    parsedReference.gid
+                );
+
+                if (gidSheetRef) {
+                    const fallbackRange = applySheetRefToRange(targetResult.range, gidSheetRef);
+                    if (fallbackRange !== targetResult.range) {
+                        logger.warn("Retrying Google Sheet template read with gid-resolved range", {
+                            spreadsheetId: targetResult.spreadsheetId,
+                            originalRange: targetResult.range,
+                            fallbackRange,
+                        });
+
+                        const fallbackRequestResult = await requestHeaders(fallbackRange);
+                        if (fallbackRequestResult.response?.ok) {
+                            resolvedRange = fallbackRange;
+                            const fallbackPayload = await fallbackRequestResult.response.json() as { values?: unknown[][] };
+                            const fallbackFirstRow = Array.isArray(fallbackPayload.values?.[0]) ? fallbackPayload.values[0] : [];
+                            const fallbackHeaders = fallbackFirstRow.map((cell) => String(cell).trim()).filter(Boolean);
+                            if (fallbackHeaders.length === 0) {
+                                return {
+                                    success: false,
+                                    error: "Google Sheet template has no header row. Add column names in row 1.",
+                                };
+                            }
+
+                            const fallbackHeaderDropdowns = await this.resolveHeaderDropdowns(
+                                authResult.context,
+                                targetResult.spreadsheetId,
+                                resolvedRange,
+                                fallbackHeaders.length
+                            );
+
+                            return {
+                                success: true,
+                                spreadsheetId: targetResult.spreadsheetId,
+                                range: resolvedRange,
+                                headers: fallbackHeaders,
+                                headerDropdowns: fallbackHeaderDropdowns,
+                            };
+                        }
+                    }
+                }
+            }
+
             return { success: false, error: parsedError.message, errorDetails: parsedError.errorDetails };
         }
 
@@ -588,11 +972,19 @@ export class GoogleSheetsService {
             };
         }
 
+        const headerDropdowns = await this.resolveHeaderDropdowns(
+            authResult.context,
+            targetResult.spreadsheetId,
+            resolvedRange,
+            headers.length
+        );
+
         return {
             success: true,
             spreadsheetId: targetResult.spreadsheetId,
-            range: targetResult.range,
+            range: resolvedRange,
             headers,
+            headerDropdowns,
         };
     }
 
@@ -614,24 +1006,29 @@ export class GoogleSheetsService {
             return { success: false, error: authResult.error };
         }
 
+        const parsedReference = parseSpreadsheetReference(spreadsheetReference);
         const targetResult = await this.resolveSheetTarget(authResult.context, spreadsheetReference, range);
         if (!targetResult.success) {
             return { success: false, error: targetResult.error };
         }
 
-        const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(targetResult.spreadsheetId)}/values/${encodeURIComponent(targetResult.range)}:append?valueInputOption=RAW`;
-        const requestResult = await this.requestWithRetry(authResult.context, (token) =>
-            fetch(endpoint, {
-                method: "POST",
-                headers: {
-                    Authorization: `Bearer ${token}`,
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    values: [values], // Sheets API expects an array of arrays (rows)
-                }),
-            })
-        );
+        const requestAppend = async (rangeToAppend: string) => {
+            const endpoint = `https://sheets.googleapis.com/v4/spreadsheets/${encodeURIComponent(targetResult.spreadsheetId)}/values/${encodeURIComponent(rangeToAppend)}:append?valueInputOption=RAW`;
+            return this.requestWithRetry(authResult.context, (token) =>
+                fetch(endpoint, {
+                    method: "POST",
+                    headers: {
+                        Authorization: `Bearer ${token}`,
+                        "Content-Type": "application/json",
+                    },
+                    body: JSON.stringify({
+                        values: [values], // Sheets API expects an array of arrays (rows)
+                    }),
+                })
+            );
+        };
+
+        const requestResult = await requestAppend(targetResult.range);
 
         if (requestResult.error || !requestResult.response) {
             return { success: false, error: requestResult.error ?? "Failed to append to Google Sheet." };
@@ -639,6 +1036,42 @@ export class GoogleSheetsService {
 
         if (!requestResult.response.ok) {
             const parsedError = await this.parseApiError(requestResult.response, "Append failed");
+            const isRangeParseError =
+                parsedError.errorDetails.googleStatus === "INVALID_ARGUMENT" &&
+                /unable to parse range/i.test(parsedError.message);
+
+            if (parsedReference?.gid !== undefined && isRangeParseError) {
+                const gidSheetRef = await this.resolveSheetRangeFromGid(
+                    authResult.context,
+                    targetResult.spreadsheetId,
+                    parsedReference.gid
+                );
+
+                if (gidSheetRef) {
+                    const fallbackRange = applySheetRefToRange(targetResult.range, gidSheetRef);
+                    if (fallbackRange !== targetResult.range) {
+                        logger.warn("Retrying Google Sheets append with gid-resolved range", {
+                            spreadsheetId: targetResult.spreadsheetId,
+                            originalRange: targetResult.range,
+                            fallbackRange,
+                        });
+
+                        const fallbackRequestResult = await requestAppend(fallbackRange);
+                        if (fallbackRequestResult.response?.ok) {
+                            logger.info("Google Sheets append succeeded after range fallback", {
+                                spreadsheetId: targetResult.spreadsheetId,
+                                range: fallbackRange,
+                            });
+                            return {
+                                success: true,
+                                spreadsheetId: targetResult.spreadsheetId,
+                                range: fallbackRange,
+                            };
+                        }
+                    }
+                }
+            }
+
             return { success: false, error: parsedError.message, errorDetails: parsedError.errorDetails };
         }
 

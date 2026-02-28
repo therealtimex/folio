@@ -4,7 +4,7 @@ import { Actuator } from "../Actuator.js";
 
 export class WebhookAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
-        const { action, variables, userId, ingestionId, supabase } = context;
+        const { action, variables, data, userId, ingestionId, supabase } = context;
         const webhookUrlTemplate = pickString(action as any, "url");
         const webhookPayloadTemplate = pickString(action as any, "payload");
 
@@ -17,8 +17,8 @@ export class WebhookAction implements ActionHandler {
             };
         }
 
-        const url = interpolate(webhookUrlTemplate, variables);
-        const payloadStr = interpolate(webhookPayloadTemplate, variables);
+        const url = interpolate(webhookUrlTemplate, variables, data);
+        const payloadStr = interpolate(webhookPayloadTemplate, variables, data);
         let payload: any;
 
         try {

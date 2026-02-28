@@ -19,6 +19,11 @@ const HEADER_ALIASES: Record<string, string[]> = {
     receipt_date: ["date"],
 };
 
+type HeaderDropdown = {
+    strict: boolean;
+    allowedValues: string[];
+};
+
 function normalizeKey(value: string): string {
     return value.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
@@ -63,6 +68,38 @@ function resolveHeaderValue(
     return "";
 }
 
+function isDropdownValueAllowed(value: string, allowedValues: string[]): boolean {
+    const candidate = value.trim().toLowerCase();
+    if (!candidate) return true;
+    return allowedValues.some((allowed) => allowed.trim().toLowerCase() === candidate);
+}
+
+function applyStrictDropdownGuards(
+    headers: string[],
+    values: string[],
+    headerDropdowns: Array<HeaderDropdown | null>
+): { values: string[]; skippedColumns: string[] } {
+    const nextValues = [...values];
+    const skippedColumns: string[] = [];
+    const maxColumns = Math.min(headers.length, nextValues.length);
+
+    for (let index = 0; index < maxColumns; index += 1) {
+        const dropdown = headerDropdowns[index];
+        if (!dropdown || dropdown.strict !== true || dropdown.allowedValues.length === 0) {
+            continue;
+        }
+
+        const currentValue = nextValues[index] ?? "";
+        if (!currentValue.trim()) continue;
+        if (isDropdownValueAllowed(currentValue, dropdown.allowedValues)) continue;
+
+        nextValues[index] = "";
+        skippedColumns.push(headers[index] || `column_${index + 1}`);
+    }
+
+    return { values: nextValues, skippedColumns };
+}
+
 export class AppendToGSheetAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
         const { ingestionId, userId, supabase } = context;
@@ -89,7 +126,34 @@ export class AppendToGSheetAction implements ActionHandler {
         let usedDynamicMapping = false;
 
         if (columnTemplates.length > 0) {
-            values = columnTemplates.map((template) => interpolate(template, context.variables));
+            values = columnTemplates.map((template) => interpolate(template, context.variables, context.data));
+
+            const templateResult = await GoogleSheetsService.resolveTemplate(
+                context.userId,
+                spreadsheetReference,
+                configuredRange,
+                context.supabase
+            );
+            if (templateResult.success && (templateResult.headers?.length ?? 0) > 0) {
+                const dropdownGuard = applyStrictDropdownGuards(
+                    templateResult.headers ?? [],
+                    values,
+                    (templateResult.headerDropdowns ?? []) as Array<HeaderDropdown | null>
+                );
+                values = dropdownGuard.values;
+                if (dropdownGuard.skippedColumns.length > 0) {
+                    result.logs.push(
+                        `Left ${dropdownGuard.skippedColumns.length} strict dropdown column(s) blank for human selection.`
+                    );
+                    result.trace.push({
+                        timestamp: new Date().toISOString(),
+                        step: "Adjusted strict dropdown columns",
+                        details: {
+                            skippedColumns: dropdownGuard.skippedColumns,
+                        },
+                    });
+                }
+            }
         } else {
             const templateResult = await GoogleSheetsService.resolveTemplate(
                 context.userId,
@@ -117,6 +181,24 @@ export class AppendToGSheetAction implements ActionHandler {
             rangeToAppend = templateResult.range;
             const normalizedVariables = buildNormalizedVariableLookup(context.variables);
             values = headers.map((header) => resolveHeaderValue(header, context.variables, normalizedVariables));
+            const dropdownGuard = applyStrictDropdownGuards(
+                headers,
+                values,
+                (templateResult.headerDropdowns ?? []) as Array<HeaderDropdown | null>
+            );
+            values = dropdownGuard.values;
+            if (dropdownGuard.skippedColumns.length > 0) {
+                result.logs.push(
+                    `Left ${dropdownGuard.skippedColumns.length} strict dropdown column(s) blank for human selection.`
+                );
+                result.trace.push({
+                    timestamp: new Date().toISOString(),
+                    step: "Adjusted strict dropdown columns",
+                    details: {
+                        skippedColumns: dropdownGuard.skippedColumns,
+                    },
+                });
+            }
             usedDynamicMapping = true;
 
             result.trace.push({

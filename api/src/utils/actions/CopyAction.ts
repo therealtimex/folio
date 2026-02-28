@@ -7,7 +7,7 @@ import { GoogleDriveService } from "../../services/GoogleDriveService.js";
 
 export class CopyAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
-        const { action, file, variables, userId, ingestionId, supabase } = context;
+        const { action, file, variables, data, userId, ingestionId, supabase } = context;
         const destination = pickString(action as any, "destination");
         const pattern = pickString(action as any, "pattern");
         const filenameConfig = pickString(action as any, "filename");
@@ -21,7 +21,7 @@ export class CopyAction implements ActionHandler {
             };
         }
 
-        const destDir = interpolate(destination, variables);
+        const destDir = interpolate(destination, variables, data);
 
         // Support legacy gdrive:// destinations before copy_to_gdrive existed.
         if (destDir.startsWith("gdrive://")) {
@@ -30,7 +30,7 @@ export class CopyAction implements ActionHandler {
             if (filenameConfig) {
                 const ext = path.extname(file.name);
                 const stem = file.name.slice(0, file.name.length - ext.length);
-                gdriveFileName = resolveFilename(filenameConfig, variables, stem, ext);
+                gdriveFileName = resolveFilename(filenameConfig, variables, stem, ext, data);
             }
             const uploadResult = await GoogleDriveService.uploadFile(userId, file.path, folderPath, supabase, gdriveFileName);
             if (!uploadResult.success) {
@@ -62,10 +62,10 @@ export class CopyAction implements ActionHandler {
         const stem = file.name.slice(0, file.name.length - ext.length);
         let newName: string;
         if (filenameConfig) {
-            newName = resolveFilename(filenameConfig, variables, stem, ext);
+            newName = resolveFilename(filenameConfig, variables, stem, ext, data);
         } else if (pattern) {
             // Backward-compat: treat pattern as a filename template
-            newName = interpolate(pattern, variables);
+            newName = interpolate(pattern, variables, data);
             if (!newName.endsWith(ext)) newName += ext;
         } else {
             newName = file.name;

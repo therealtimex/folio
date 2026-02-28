@@ -7,7 +7,7 @@ import { getServiceRoleSupabase } from "../../services/supabase.js";
 
 export class RenameAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
-        const { action, file, variables, userId, ingestionId, supabase } = context;
+        const { action, file, variables, data, userId, ingestionId, supabase } = context;
         const pattern = pickString(action as any, "pattern");
 
         if (!pattern) {
@@ -21,7 +21,7 @@ export class RenameAction implements ActionHandler {
 
         const ext = path.extname(file.path);
         const dir = path.dirname(file.path);
-        let newName = interpolate(pattern, variables);
+        let newName = interpolate(pattern, variables, data);
         if (!newName.endsWith(ext)) newName += ext;
         const newPath = path.join(dir, newName);
 

@@ -10,7 +10,7 @@ const logger = createLogger("AutoRenameAction");
 
 export class AutoRenameAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
-        const { file, variables, userId, ingestionId, supabase } = context;
+        const { file, variables, data, userId, ingestionId, supabase } = context;
 
         const ext = path.extname(file.path);
         const dir = path.dirname(file.path);
@@ -23,7 +23,7 @@ export class AutoRenameAction implements ActionHandler {
             document_type: variables.document_type ?? "(missing)",
         });
 
-        const newName = resolveFilename("auto", variables, stem, ext);
+        const newName = resolveFilename("auto", variables, stem, ext, data);
         const newPath = path.join(dir, newName);
 
         await new Promise<void>((resolve, reject) => {

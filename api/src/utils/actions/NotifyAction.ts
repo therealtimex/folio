@@ -7,7 +7,7 @@ const logger = createLogger("NotifyAction");
 
 export class NotifyAction implements ActionHandler {
     async execute(context: ActionContext): Promise<ActionResult> {
-        const { action, variables, userId, ingestionId, supabase } = context;
+        const { action, variables, data, userId, ingestionId, supabase } = context;
         const messageTemplate = pickString(action as any, "message");
 
         if (!messageTemplate) {
@@ -19,7 +19,7 @@ export class NotifyAction implements ActionHandler {
             };
         }
 
-        const msg = interpolate(messageTemplate, variables);
+        const msg = interpolate(messageTemplate, variables, data);
         logger.info(`[NOTIFY] ${msg}`);
 
         const trace = [{

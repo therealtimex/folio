@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ActionHandler, ActionContext, ActionResult } from "./ActionHandler.js";
-import { pickString, pickColumns, interpolate } from "./utils.js";
+import { pickString, pickColumns, interpolate, getNestedVariable } from "./utils.js";
 import { Actuator } from "../Actuator.js";
 
 export class LogCsvAction implements ActionHandler {
@@ -18,9 +18,9 @@ export class LogCsvAction implements ActionHandler {
             };
         }
 
-        const csvPath = interpolate(csvPathTemplate, variables);
+        const csvPath = interpolate(csvPathTemplate, variables, data);
         const cols = pickColumns(action as any, Object.keys(data));
-        const row = cols.map((c) => variables[c] ?? "").join(",") + "\n";
+        const row = cols.map((c) => getNestedVariable(c, variables, data) ?? "").join(",") + "\n";
         const header = cols.join(",") + "\n";
 
         if (!fs.existsSync(csvPath)) {

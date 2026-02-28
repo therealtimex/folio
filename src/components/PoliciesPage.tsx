@@ -182,7 +182,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                 description,
                 provider: selectedProvider || undefined,
                 model: selectedModel || undefined
-            });
+            }, sessionToken);
             if (resp?.data?.policy) {
                 setSynthesizedPolicy(resp.data.policy);
                 setShowSynthesizedJson(false);
