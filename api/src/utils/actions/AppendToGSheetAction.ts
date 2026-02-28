@@ -17,6 +17,10 @@ const HEADER_ALIASES: Record<string, string[]> = {
     issued_on: ["date"],
     invoice_date: ["date"],
     receipt_date: ["date"],
+    image_link: ["file_url", "drive_file_url", "file_link", "document_link"],
+    file_link: ["file_url", "drive_file_url", "image_link", "document_link"],
+    document_link: ["file_url", "drive_file_url", "file_link", "image_link"],
+    link: ["file_url", "drive_file_url", "file_link", "document_link", "image_link"],
 };
 
 type HeaderDropdown = {

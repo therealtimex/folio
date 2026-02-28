@@ -3,7 +3,9 @@ import fs from "fs/promises";
 import { PDFParse } from "pdf-parse";
 import { createLogger } from "../utils/logger.js";
 import { PolicyLoader } from "./PolicyLoader.js";
+import type { FolioPolicy } from "./PolicyLoader.js";
 import { PolicyEngine } from "./PolicyEngine.js";
+import { PolicyLearningService } from "./PolicyLearningService.js";
 import { BaselineConfigService } from "./BaselineConfigService.js";
 import { Actuator } from "../utils/Actuator.js";
 import { extractLlmResponse, previewLlmText } from "../utils/llmResponse.js";
@@ -85,6 +87,22 @@ export interface Ingestion {
 }
 
 export class IngestionService {
+    private static readonly NON_IDEMPOTENT_ACTION_TYPES = new Set([
+        "append_to_google_sheet",
+        "webhook",
+        "copy_to_gdrive",
+        "copy",
+        "log_csv",
+        "notify",
+    ]);
+
+    private static listNonIdempotentPolicyActions(policy: FolioPolicy): string[] {
+        const actionTypes = Array.isArray(policy.spec.actions)
+            ? policy.spec.actions.map((action) => String(action?.type ?? "").trim()).filter(Boolean)
+            : [];
+        return Array.from(new Set(actionTypes.filter((actionType) => this.NON_IDEMPOTENT_ACTION_TYPES.has(actionType))));
+    }
+
     private static valueToSemanticText(value: unknown): string {
         if (value == null) return "";
         if (Array.isArray(value)) {
@@ -539,7 +557,12 @@ export class IngestionService {
     /**
      * Re-run an existing ingestion
      */
-    static async rerun(ingestionId: string, supabase: SupabaseClient, userId: string): Promise<boolean> {
+    static async rerun(
+        ingestionId: string,
+        supabase: SupabaseClient,
+        userId: string,
+        opts: { forcedPolicyId?: string } = {}
+    ): Promise<boolean> {
         const { data: ingestion, error } = await supabase
             .from("ingestions")
             .select("*")
@@ -674,13 +697,31 @@ export class IngestionService {
             let result: import("./PolicyEngine.js").ProcessingResult;
             let policyName;
             try {
-                if (userPolicies.length > 0) {
-                    result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings, baselineEntities);
+                const forcedPolicyId = opts.forcedPolicyId?.trim();
+                const activePolicies = forcedPolicyId
+                    ? userPolicies.filter((policy) => policy.metadata.id === forcedPolicyId)
+                    : userPolicies;
+
+                if (forcedPolicyId && activePolicies.length === 0) {
+                    throw new Error(`Policy "${forcedPolicyId}" was not found or is disabled.`);
+                }
+
+                if (activePolicies.length > 0) {
+                    result = await PolicyEngine.processWithPolicies(
+                        enrichedDoc,
+                        activePolicies,
+                        llmSettings,
+                        baselineEntities,
+                        {
+                            ...(forcedPolicyId ? { forcedPolicyId } : {}),
+                            allowLearnedFallback: !forcedPolicyId,
+                        }
+                    );
                 } else {
                     result = await PolicyEngine.process(enrichedDoc, llmSettings, baselineEntities);
                 }
 
-                policyName = result.matchedPolicy ? userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name : undefined;
+                policyName = result.matchedPolicy ? activePolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name : undefined;
                 finalStatus = result.status === "fallback" ? "no_match" : result.status;
                 const mergedExtracted = { ...baselineEntities, ...result.extractedData };
 
@@ -789,6 +830,125 @@ export class IngestionService {
             .eq("id", ingestionId);
 
         return true;
+    }
+
+    /**
+     * Manually assign an ingestion to a policy and optionally persist it as
+     * learning feedback for future automatic matching.
+     */
+    static async matchToPolicy(
+        ingestionId: string,
+        policyId: string,
+        supabase: SupabaseClient,
+        userId: string,
+        opts: { learn?: boolean; rerun?: boolean; allowSideEffects?: boolean } = {}
+    ): Promise<Ingestion> {
+        const learn = opts.learn !== false;
+        const rerun = opts.rerun !== false;
+        const allowSideEffects = opts.allowSideEffects === true;
+        const normalizedPolicyId = policyId.trim();
+        if (!normalizedPolicyId) {
+            throw new Error("policy_id is required");
+        }
+
+        const { data: ingestion, error: ingestionError } = await supabase
+            .from("ingestions")
+            .select("*")
+            .eq("id", ingestionId)
+            .eq("user_id", userId)
+            .single();
+        if (ingestionError || !ingestion) {
+            throw new Error("Ingestion not found");
+        }
+
+        if (ingestion.status === "processing" || ingestion.status === "pending") {
+            throw new Error("Cannot manually match while ingestion is still processing");
+        }
+
+        const policies = await PolicyLoader.load(false, supabase);
+        const policy = policies.find((item) => item.metadata.id === normalizedPolicyId);
+        if (!policy) {
+            throw new Error(`Policy "${normalizedPolicyId}" was not found or is disabled.`);
+        }
+
+        const riskyActions = this.listNonIdempotentPolicyActions(policy);
+        if (rerun && riskyActions.length > 0 && !allowSideEffects) {
+            throw new Error(
+                `Re-running this policy may trigger side-effect actions (${riskyActions.join(", ")}). ` +
+                "Confirm allow_side_effects=true to continue."
+            );
+        }
+
+        let effectiveIngestion: Ingestion;
+        if (rerun) {
+            Actuator.logEvent(ingestionId, userId, "info", "Policy Matching", {
+                action: "Manual match requested with rerun",
+                policyId: policy.metadata.id,
+                policyName: policy.metadata.name,
+                learn,
+                risky_actions: riskyActions,
+            }, supabase);
+
+            await this.rerun(ingestionId, supabase, userId, { forcedPolicyId: policy.metadata.id });
+            const refreshed = await this.get(ingestionId, supabase, userId);
+            if (!refreshed) {
+                throw new Error("Ingestion not found after rerun.");
+            }
+            effectiveIngestion = refreshed;
+        } else {
+            const nextTrace = [
+                ...(Array.isArray(ingestion.trace) ? ingestion.trace : []),
+                {
+                    timestamp: new Date().toISOString(),
+                    step: "Manual policy match override",
+                    details: {
+                        policyId: policy.metadata.id,
+                        policyName: policy.metadata.name,
+                        learn,
+                        rerun,
+                    }
+                }
+            ];
+
+            const { data: updatedIngestion, error: updateError } = await supabase
+                .from("ingestions")
+                .update({
+                    status: "matched",
+                    policy_id: policy.metadata.id,
+                    policy_name: policy.metadata.name,
+                    error_message: null,
+                    trace: nextTrace,
+                })
+                .eq("id", ingestionId)
+                .eq("user_id", userId)
+                .select("*")
+                .single();
+
+            if (updateError || !updatedIngestion) {
+                throw new Error(`Failed to update ingestion policy match: ${updateError?.message ?? "unknown error"}`);
+            }
+            effectiveIngestion = updatedIngestion as Ingestion;
+        }
+
+        Actuator.logEvent(ingestionId, userId, "info", "Policy Matching", {
+            action: rerun ? "Manual policy match override + rerun" : "Manual policy match override",
+            policyId: policy.metadata.id,
+            policyName: policy.metadata.name,
+            learn,
+            rerun,
+        }, supabase);
+
+        if (learn) {
+            await PolicyLearningService.recordManualMatch({
+                supabase,
+                userId,
+                ingestion: effectiveIngestion,
+                policyId: policy.metadata.id,
+                policyName: policy.metadata.name,
+            });
+        }
+
+        return effectiveIngestion;
     }
 
     /**

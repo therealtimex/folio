@@ -586,6 +586,31 @@ export function FunnelPage({ onComposePolicyForDoc }: FunnelPageProps) {
                         }
                         : undefined
                     }
+                    onManualMatch={async ({ policyId, learn, rerun, allowSideEffects }) => {
+                        const resp = await api.matchIngestionToPolicy(
+                            selected.id,
+                            { policyId, learn, rerun, allowSideEffects },
+                            sessionToken
+                        );
+                        if (resp?.error) {
+                            const message = typeof resp.error === "string" ? resp.error : resp.error.message;
+                            throw new Error(message || "Failed to match ingestion to policy.");
+                        }
+                        const updated = resp?.data?.ingestion as Ingestion | undefined;
+                        if (!updated) {
+                            throw new Error("Match succeeded but updated ingestion payload is missing.");
+                        }
+                        if (updated) {
+                            setIngestions((prev) => prev.map((item) => (item.id === updated.id ? updated : item)));
+                            setSelected(updated);
+                        }
+                        await fetchIngestions(page);
+                        if (rerun) {
+                            toast.success(learn ? "Policy matched, learned, and re-run started." : "Policy matched and re-run started.");
+                        } else {
+                            toast.success(learn ? "Policy match saved and learned." : "Policy match saved.");
+                        }
+                    }}
                 />
             )}
 

@@ -18,6 +18,31 @@ const logger = createLogger("Actuator");
 
 let warnedMissingServiceRole = false;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function toVariableString(value: unknown): string | undefined {
+    if (value == null) return undefined;
+    if (typeof value === "string") return value;
+    if (typeof value === "number" || typeof value === "boolean") return String(value);
+    try {
+        return JSON.stringify(value);
+    } catch {
+        return undefined;
+    }
+}
+
+function ensureRecord(container: ExtractedData, key: string): Record<string, unknown> {
+    const existing = container[key];
+    if (isRecord(existing)) {
+        return existing;
+    }
+    const next: Record<string, unknown> = {};
+    container[key] = next;
+    return next;
+}
+
 export interface ActuatorResult {
     success: boolean;
     actionsExecuted: string[];
@@ -39,6 +64,58 @@ export class Actuator {
 
     static registerAction(type: string, handler: ActionHandler) {
         this.handlers.set(type, handler);
+    }
+
+    private static mergeActionOutputs(
+        runtimeData: ExtractedData,
+        runtimeVariables: Record<string, string>,
+        actionType: string,
+        actionIndex: number,
+        outputs: Record<string, unknown>
+    ): string[] {
+        const outputKeys = Object.keys(outputs);
+        if (outputKeys.length === 0) return outputKeys;
+
+        const actionsByType = ensureRecord(runtimeData, "_actions");
+        const previousByType = actionsByType[actionType];
+        const mergedByType = {
+            ...(isRecord(previousByType) ? previousByType : {}),
+            ...outputs,
+        };
+        actionsByType[actionType] = mergedByType;
+
+        const history = Array.isArray(runtimeData._action_history) ? [...runtimeData._action_history] : [];
+        const historyEntry: Record<string, unknown> = {
+            index: actionIndex,
+            type: actionType,
+            ...outputs,
+        };
+        history.push(historyEntry);
+        runtimeData._action_history = history;
+        runtimeData._last = historyEntry;
+        runtimeData._last_action_type = actionType;
+        runtimeVariables._last_action_type = actionType;
+
+        for (const key of outputKeys) {
+            const value = outputs[key];
+            const serialized = toVariableString(value);
+
+            if (runtimeData[key] === undefined) {
+                runtimeData[key] = value;
+            }
+
+            if (serialized === undefined) continue;
+
+            runtimeVariables[`${actionType}.${key}`] = serialized;
+            runtimeVariables[`_actions.${actionType}.${key}`] = serialized;
+            runtimeVariables[`_last.${key}`] = serialized;
+
+            if (runtimeVariables[key] === undefined) {
+                runtimeVariables[key] = serialized;
+            }
+        }
+
+        return outputKeys;
     }
 
     static async logEvent(
@@ -108,9 +185,14 @@ export class Actuator {
             currentFile.name = `${yyyy}-${MM}-${dd}_${HH}-${mm}-${ss}_${tsMatch[2]}`;
         }
 
-        const variables = deriveVariables(data, fields);
+        const runtimeData: ExtractedData = { ...data };
+        const runtimeVariables = deriveVariables(runtimeData, fields);
+        runtimeData.current_file_name = currentFile.name;
+        runtimeData.current_file_path = currentFile.path;
+        runtimeVariables.current_file_name = currentFile.name;
+        runtimeVariables.current_file_path = currentFile.path;
 
-        for (const action of actions) {
+        for (const [actionIndex, action] of actions.entries()) {
             const handler = this.handlers.get(action.type);
 
             if (!handler) {
@@ -124,11 +206,16 @@ export class Actuator {
             }
 
             try {
+                runtimeData.current_file_name = currentFile.name;
+                runtimeData.current_file_path = currentFile.path;
+                runtimeVariables.current_file_name = currentFile.name;
+                runtimeVariables.current_file_path = currentFile.path;
+
                 const context: ActionContext = {
                     action: action as any,
-                    data,
+                    data: runtimeData,
                     file: currentFile,
-                    variables,
+                    variables: runtimeVariables,
                     userId,
                     ingestionId,
                     supabase,
@@ -141,6 +228,27 @@ export class Actuator {
                 if (handlerResult.success) {
                     if (handlerResult.newFileState) {
                         currentFile = handlerResult.newFileState;
+                        runtimeData.current_file_name = currentFile.name;
+                        runtimeData.current_file_path = currentFile.path;
+                        runtimeVariables.current_file_name = currentFile.name;
+                        runtimeVariables.current_file_path = currentFile.path;
+                    }
+                    if (handlerResult.outputs && Object.keys(handlerResult.outputs).length > 0) {
+                        const outputKeys = this.mergeActionOutputs(
+                            runtimeData,
+                            runtimeVariables,
+                            action.type,
+                            actionIndex,
+                            handlerResult.outputs
+                        );
+                        result.trace.push({
+                            timestamp: new Date().toISOString(),
+                            step: "Captured action outputs",
+                            details: {
+                                action: action.type,
+                                outputKeys,
+                            },
+                        });
                     }
                     result.actionsExecuted.push(...handlerResult.logs);
                 } else {

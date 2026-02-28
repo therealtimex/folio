@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { PolicyAction } from "../../services/PolicyLoader.js";
+import type { ExtractedData } from "./utils.js";
 
 export interface TraceLog {
     timestamp: string;
@@ -9,7 +10,7 @@ export interface TraceLog {
 
 export interface ActionContext {
     action: PolicyAction;
-    data: Record<string, string | number | null>;
+    data: ExtractedData;
     file: { path: string; name: string };
     variables: Record<string, string>;
     userId: string;
@@ -22,6 +23,7 @@ export interface ActionResult {
     newFileState?: { path: string; name: string };
     logs: string[];
     trace: TraceLog[];
+    outputs?: Record<string, unknown>;
     error?: string;
     errorDetails?: Record<string, unknown>;
 }

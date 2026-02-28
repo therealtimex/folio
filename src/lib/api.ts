@@ -479,6 +479,25 @@ class HybridApiClient {
     });
   }
 
+  matchIngestionToPolicy(
+    id: string,
+    payload: { policyId: string; learn?: boolean; rerun?: boolean; allowSideEffects?: boolean },
+    token?: string | null
+  ) {
+    const learn = payload.learn !== false;
+    const rerun = payload.rerun !== false;
+    return this.expressRequest<{ success: boolean; ingestion: any }>(`/api/ingestions/${id}/match`, {
+      method: "POST",
+      auth: Boolean(token), token,
+      body: JSON.stringify({
+        policy_id: payload.policyId,
+        learn,
+        rerun,
+        allow_side_effects: payload.allowSideEffects === true,
+      })
+    });
+  }
+
   deleteIngestion(id: string, token?: string | null) {
     return this.expressRequest<{ success: boolean }>(`/api/ingestions/${id}`, {
       method: "DELETE",

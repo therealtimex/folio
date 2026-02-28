@@ -111,6 +111,52 @@ router.post(
     })
 );
 
+// POST /api/ingestions/:id/match — manually assign a policy and optionally learn from it
+router.post(
+    "/:id/match",
+    asyncHandler(async (req, res) => {
+        if (!req.supabase || !req.user) {
+            res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+
+        const policyId = typeof req.body?.policy_id === "string" ? req.body.policy_id.trim() : "";
+        if (!policyId) {
+            res.status(400).json({ success: false, error: "policy_id is required" });
+            return;
+        }
+
+        const learn = req.body?.learn !== false;
+        const rerun = req.body?.rerun !== false;
+        const allowSideEffects = req.body?.allow_side_effects === true;
+        try {
+            const ingestion = await IngestionService.matchToPolicy(
+                req.params["id"] as string,
+                policyId,
+                req.supabase,
+                req.user.id,
+                {
+                    learn,
+                    rerun,
+                    allowSideEffects,
+                }
+            );
+            res.json({ success: true, ingestion });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            if (/not found/i.test(message)) {
+                res.status(404).json({ success: false, error: message });
+                return;
+            }
+            if (/required|processing|disabled|cannot manually match|side-effect/i.test(message)) {
+                res.status(400).json({ success: false, error: message });
+                return;
+            }
+            throw error;
+        }
+    })
+);
+
 // POST /api/ingestions/:id/summarize — generate (or return cached) prose summary
 router.post(
     "/:id/summarize",

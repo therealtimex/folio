@@ -26,7 +26,15 @@ interface Props {
     onRerun: () => Promise<void>;
     onTagsChange: (tags: string[]) => void;
     onComposePolicy?: (description: string) => void;
+    onManualMatch?: (opts: { policyId: string; learn: boolean; rerun: boolean; allowSideEffects: boolean }) => Promise<void>;
 }
+
+type ManualPolicyOption = {
+    id: string;
+    name: string;
+    priority: number;
+    riskyActions: string[];
+};
 
 function StatusIcon({ status }: { status: Ingestion["status"] }) {
     const map = {
@@ -167,7 +175,7 @@ function TagEditor({ tags, onChange }: { tags: string[]; onChange: (tags: string
 
 // ─── Modal ────────────────────────────────────────────────────────────────────
 
-export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsChange, onComposePolicy }: Props) {
+export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsChange, onComposePolicy, onManualMatch }: Props) {
     const extracted = ing.extracted && Object.keys(ing.extracted).length > 0 ? ing.extracted : null;
     const enrichment = extracted && typeof extracted["_enrichment"] === "object" && extracted["_enrichment"] !== null
         ? extracted["_enrichment"] as Record<string, unknown>
@@ -177,8 +185,17 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
     // ─── Summary state ────────────────────────────────────────────────────────
     const [summary, setSummary] = useState<string | null>(ing.summary ?? null);
     const [isSummarizing, setIsSummarizing] = useState(false);
+    const [policyOptions, setPolicyOptions] = useState<ManualPolicyOption[]>([]);
+    const [isLoadingPolicies, setIsLoadingPolicies] = useState(false);
+    const [selectedPolicyId, setSelectedPolicyId] = useState("");
+    const [learnFromMatch, setLearnFromMatch] = useState(true);
+    const [rerunOnMatch, setRerunOnMatch] = useState(true);
+    const [allowSideEffects, setAllowSideEffects] = useState(false);
+    const [isApplyingManualMatch, setIsApplyingManualMatch] = useState(false);
+    const [manualMatchError, setManualMatchError] = useState<string | null>(null);
 
     const canSummarize = ing.status !== "pending" && ing.status !== "processing";
+    const canManualMatch = !!onManualMatch && !ing.policy_name && ing.status !== "pending" && ing.status !== "processing";
 
     useEffect(() => {
         if (!canSummarize) return;
@@ -201,6 +218,88 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
         return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [ing.id]);
+
+    useEffect(() => {
+        if (!canManualMatch) return;
+        let cancelled = false;
+
+        (async () => {
+            setIsLoadingPolicies(true);
+            setManualMatchError(null);
+            try {
+                const session = await getSupabaseClient()?.auth.getSession();
+                const token = session?.data?.session?.access_token ?? null;
+                const response = await api.getPolicies(token);
+                if (cancelled) return;
+                if (response?.error) {
+                    const message = typeof response.error === "string" ? response.error : response.error.message;
+                    throw new Error(message || "Failed to load policies.");
+                }
+
+                const policies = (response?.data?.policies ?? [])
+                    .map((policy: any) => ({
+                        id: String(policy?.metadata?.id ?? ""),
+                        name: String(policy?.metadata?.name ?? policy?.metadata?.id ?? ""),
+                        priority: Number(policy?.metadata?.priority ?? 100),
+                        riskyActions: (Array.isArray(policy?.spec?.actions) ? policy.spec.actions : [])
+                            .map((action: any) => String(action?.type ?? "").trim())
+                            .filter((actionType: string) =>
+                                actionType === "append_to_google_sheet" ||
+                                actionType === "webhook" ||
+                                actionType === "copy_to_gdrive" ||
+                                actionType === "copy" ||
+                                actionType === "log_csv" ||
+                                actionType === "notify"
+                            ),
+                    }))
+                    .filter((policy: ManualPolicyOption) => policy.id.length > 0)
+                    .sort((a: ManualPolicyOption, b: ManualPolicyOption) => b.priority - a.priority);
+
+                setPolicyOptions(policies);
+                setSelectedPolicyId((prev) => prev || policies[0]?.id || "");
+            } catch {
+                if (!cancelled) {
+                    setPolicyOptions([]);
+                    setManualMatchError("Failed to load policies.");
+                }
+            } finally {
+                if (!cancelled) setIsLoadingPolicies(false);
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [canManualMatch, ing.id]);
+
+    const handleManualMatch = useCallback(async () => {
+        if (!onManualMatch || !selectedPolicyId || isApplyingManualMatch) return;
+        const selectedPolicy = policyOptions.find((policy) => policy.id === selectedPolicyId);
+        const selectedRiskyActions = selectedPolicy?.riskyActions ?? [];
+        if (rerunOnMatch && selectedRiskyActions.length > 0 && !allowSideEffects) {
+            setManualMatchError(
+                `Re-run may trigger side-effect actions: ${selectedRiskyActions.join(", ")}. ` +
+                "Enable side-effect confirmation to continue."
+            );
+            return;
+        }
+        setIsApplyingManualMatch(true);
+        setManualMatchError(null);
+        try {
+            await onManualMatch({
+                policyId: selectedPolicyId,
+                learn: learnFromMatch,
+                rerun: rerunOnMatch,
+                allowSideEffects: rerunOnMatch ? allowSideEffects : false,
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setManualMatchError(message || "Failed to assign policy.");
+        } finally {
+            setIsApplyingManualMatch(false);
+        }
+    }, [allowSideEffects, isApplyingManualMatch, learnFromMatch, onManualMatch, policyOptions, rerunOnMatch, selectedPolicyId]);
+
+    const selectedPolicy = policyOptions.find((policy) => policy.id === selectedPolicyId);
+    const selectedRiskyActions = selectedPolicy?.riskyActions ?? [];
 
     const handleBackdrop = useCallback((e: React.MouseEvent) => {
         if (e.target === e.currentTarget) onClose();
@@ -284,9 +383,93 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                     {/* ── Policy ────────────────────────────────────────── */}
                     <div>
                         <SectionLabel>Policy Matched</SectionLabel>
-                        {ing.policy_name
-                            ? <Badge variant="secondary">{ing.policy_name}</Badge>
-                            : <span className="text-xs text-muted-foreground">No policy matched</span>}
+                        {ing.policy_name ? (
+                            <Badge variant="secondary">{ing.policy_name}</Badge>
+                        ) : (
+                            <div className="space-y-2">
+                                <span className="text-xs text-muted-foreground">No policy matched</span>
+                                {canManualMatch && (
+                                    <div className="rounded-xl border bg-muted/20 p-3 space-y-2">
+                                        <p className="text-[10px] uppercase tracking-wider font-semibold text-muted-foreground">
+                                            Assign To Existing Policy
+                                        </p>
+                                        <div className="flex items-center gap-2">
+                                            <select
+                                                className="flex-1 h-8 rounded-lg border bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-primary/30"
+                                                value={selectedPolicyId}
+                                                onChange={(e) => {
+                                                    setSelectedPolicyId(e.target.value);
+                                                    setAllowSideEffects(false);
+                                                    setManualMatchError(null);
+                                                }}
+                                                disabled={isLoadingPolicies || isApplyingManualMatch || policyOptions.length === 0}
+                                            >
+                                                {policyOptions.length === 0 ? (
+                                                    <option value="">{isLoadingPolicies ? "Loading policies…" : "No active policies"}</option>
+                                                ) : (
+                                                    policyOptions.map((policy) => (
+                                                        <option key={policy.id} value={policy.id}>
+                                                            {policy.name}
+                                                        </option>
+                                                    ))
+                                                )}
+                                            </select>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                className="h-8 rounded-lg"
+                                                disabled={isApplyingManualMatch || isLoadingPolicies || !selectedPolicyId}
+                                                onClick={handleManualMatch}
+                                            >
+                                                {isApplyingManualMatch ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Match To Policy"}
+                                            </Button>
+                                        </div>
+                                        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                            <input
+                                                type="checkbox"
+                                                className="rounded border-muted-foreground/40"
+                                                checked={learnFromMatch}
+                                                onChange={(e) => setLearnFromMatch(e.target.checked)}
+                                                disabled={isApplyingManualMatch}
+                                            />
+                                            Learn from this match
+                                        </label>
+                                        <label className="inline-flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                                            <input
+                                                type="checkbox"
+                                                className="rounded border-muted-foreground/40"
+                                                checked={rerunOnMatch}
+                                                onChange={(e) => {
+                                                    setRerunOnMatch(e.target.checked);
+                                                    setAllowSideEffects(false);
+                                                    setManualMatchError(null);
+                                                }}
+                                                disabled={isApplyingManualMatch}
+                                            />
+                                            Re-run ingestion now (recommended)
+                                        </label>
+                                        {rerunOnMatch && selectedRiskyActions.length > 0 && (
+                                            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-700 space-y-1">
+                                                <p>This policy has side-effect actions: {selectedRiskyActions.join(", ")}</p>
+                                                <label className="inline-flex items-center gap-1.5 text-[11px]">
+                                                    <input
+                                                        type="checkbox"
+                                                        className="rounded border-amber-500/40"
+                                                        checked={allowSideEffects}
+                                                        onChange={(e) => setAllowSideEffects(e.target.checked)}
+                                                        disabled={isApplyingManualMatch}
+                                                    />
+                                                    I understand this may create external writes on re-run
+                                                </label>
+                                            </div>
+                                        )}
+                                        {manualMatchError && (
+                                            <p className="text-[11px] text-destructive">{manualMatchError}</p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
                     </div>
 
                     {/* Extracted Data */}

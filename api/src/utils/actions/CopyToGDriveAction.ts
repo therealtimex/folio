@@ -37,10 +37,26 @@ export class CopyToGDriveAction implements ActionHandler {
         }];
         Actuator.logEvent(ingestionId, userId, "action", "Action Execution", { action: "copy_to_gdrive", destinationFolderId: destDirId ?? null, fileId: uploadResult.fileId }, supabase);
 
+        const fileId = uploadResult.fileId as string;
+        const fileUrl = `https://drive.google.com/file/d/${fileId}/view`;
+        const outputs: Record<string, unknown> = {
+            provider: "google_drive",
+            file_id: fileId,
+            file_url: fileUrl,
+            drive_file_id: fileId,
+            drive_file_url: fileUrl,
+            destination_folder_id: destDirId ?? null,
+            uploaded_file_name: resolvedFileName ?? file.name,
+        };
+        if (/\.(jpg|jpeg|png|webp|gif|bmp|tiff|tif|heic)$/i.test(file.name)) {
+            outputs.image_link = fileUrl;
+        }
+
         return {
             success: true,
             logs: [`Copied to Google Drive (ID: ${uploadResult.fileId})`],
-            trace
+            trace,
+            outputs,
         };
     }
 }

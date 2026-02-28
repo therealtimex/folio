@@ -3,6 +3,7 @@ import { createLogger } from "../utils/logger.js";
 import { SDKService } from "./SDKService.js";
 import { PolicyLoader } from "./PolicyLoader.js";
 import { GoogleSheetsService } from "./GoogleSheetsService.js";
+import { PolicyLearningService } from "./PolicyLearningService.js";
 import { Actuator } from "../utils/Actuator.js";
 import { extractLlmResponse, normalizeLlmContent, previewLlmText } from "../utils/llmResponse.js";
 import type { FolioPolicy, MatchCondition, ExtractField } from "./PolicyLoader.js";
@@ -41,6 +42,11 @@ export interface ProcessingResult {
     error?: string;
     trace: TraceLog[];
 }
+
+type ProcessWithPoliciesOptions = {
+    forcedPolicyId?: string;
+    allowLearnedFallback?: boolean;
+};
 
 /**
  * Helper to build LLM message content. If the text contains the VLM marker
@@ -818,6 +824,78 @@ function toActionData(data: Record<string, unknown>): Record<string, string | nu
     return normalized;
 }
 
+async function executeMatchedPolicy(
+    policy: FolioPolicy,
+    doc: DocumentObject,
+    trace: TraceLog[],
+    settings: { llm_provider?: string; llm_model?: string },
+    baselineEntities: Record<string, unknown>,
+    matchSource: "rules" | "learned" | "manual_override" = "rules"
+): Promise<ProcessingResult> {
+    trace.push({
+        timestamp: new Date().toISOString(),
+        step: "Matched policy selected",
+        details: {
+            policyId: policy.metadata.id,
+            policyName: policy.metadata.name,
+            matchSource,
+        }
+    });
+    Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", {
+        action: "Matched policy selected",
+        policyId: policy.metadata.id,
+        policyName: policy.metadata.name,
+        matchSource,
+    }, doc.supabase);
+
+    const extractedData = await extractData(policy.spec.extract ?? [], doc, trace, settings);
+    const hasSheetAppendAction = (policy.spec.actions ?? []).some((action) => action.type === "append_to_google_sheet");
+    const enrichmentData = hasSheetAppendAction
+        ? await extractEnrichmentData(doc, extractedData, trace, settings)
+        : {};
+    const extractedForStorage = attachEnrichment(extractedData, enrichmentData);
+
+    const missingRequired = (policy.spec.extract ?? [])
+        .filter((f) => f.required && extractedData[f.key] == null)
+        .map((f) => f.key);
+
+    if (missingRequired.length > 0) {
+        trace.push({ timestamp: new Date().toISOString(), step: "Missing required fields", details: { missingRequired } });
+        Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Missing required fields", missingRequired }, doc.supabase);
+        return {
+            filePath: doc.filePath,
+            matchedPolicy: policy.metadata.id,
+            extractedData: extractedForStorage,
+            actionsExecuted: [],
+            status: "error",
+            error: `Missing required fields: ${missingRequired.join(", ")}`,
+            trace,
+        };
+    }
+
+    const actuatorResult = await Actuator.execute(
+        doc.ingestionId,
+        doc.userId,
+        policy.spec.actions ?? [],
+        toActionData({ ...baselineEntities, ...extractedData }),
+        { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
+        policy.spec.extract ?? [],
+        doc.supabase
+    );
+
+    trace.push(...actuatorResult.trace);
+
+    return {
+        filePath: doc.filePath,
+        matchedPolicy: policy.metadata.id,
+        extractedData: extractedForStorage,
+        actionsExecuted: actuatorResult.actionsExecuted,
+        status: "matched",
+        error: actuatorResult.errors[0],
+        trace,
+    };
+}
+
 // ─── Engine ──────────────────────────────────────────────────────────────────
 
 export class PolicyEngine {
@@ -837,61 +915,7 @@ export class PolicyEngine {
                 if (!matched) continue;
 
                 logger.info(`Matched policy: ${policy.metadata.id} (priority: ${policy.metadata.priority})`);
-
-                // Extract data
-                const extractedData = await extractData(policy.spec.extract ?? [], doc, globalTrace, settings);
-                const hasSheetAppendAction = (policy.spec.actions ?? []).some((action) => action.type === "append_to_google_sheet");
-                const enrichmentData = hasSheetAppendAction
-                    ? await extractEnrichmentData(doc, extractedData, globalTrace, settings)
-                    : {};
-                const extractedForStorage = attachEnrichment(extractedData, enrichmentData);
-
-                // Validate required fields
-                const missingRequired = (policy.spec.extract ?? [])
-                    .filter((f) => f.required && (extractedData[f.key] == null))
-                    .map((f) => f.key);
-
-                if (missingRequired.length > 0) {
-                    globalTrace.push({ timestamp: new Date().toISOString(), step: "Missing required fields", details: { missingRequired } });
-                    Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Missing required fields", missingRequired }, doc.supabase);
-                    logger.warn(`Missing required fields: ${missingRequired.join(", ")} — routing to Human Review`);
-                    return {
-                        filePath: doc.filePath,
-                        matchedPolicy: policy.metadata.id,
-                        extractedData: extractedForStorage,
-                        actionsExecuted: [],
-                        status: "error",
-                        error: `Missing required fields: ${missingRequired.join(", ")}`,
-                        trace: globalTrace
-                    };
-                }
-
-                // Execute actions
-                // Merge baseline entities (lower priority) with policy-specific extracted data
-                // so actions like auto_rename have access to suggested_filename from baseline.
-                const actuatorResult = await Actuator.execute(
-                    doc.ingestionId,
-                    doc.userId,
-                    policy.spec.actions ?? [],
-                    toActionData({ ...baselineEntities, ...extractedData }),
-                    { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
-                    policy.spec.extract ?? [],
-                    doc.supabase
-                );
-
-                globalTrace.push(...actuatorResult.trace);
-
-                return {
-                    filePath: actuatorResult.actionsExecuted.find((a) => a.startsWith("Moved") || a.startsWith("Renamed"))
-                        ? doc.filePath
-                        : doc.filePath,
-                    matchedPolicy: policy.metadata.id,
-                    extractedData: extractedForStorage,
-                    actionsExecuted: actuatorResult.actionsExecuted,
-                    status: "matched",
-                    error: actuatorResult.errors[0],
-                    trace: globalTrace
-                };
+                return executeMatchedPolicy(policy, doc, globalTrace, settings, baselineEntities, "rules");
             } catch (err) {
                 logger.error(`Error evaluating policy ${policy.metadata.id}`, { err });
             }
@@ -915,65 +939,92 @@ export class PolicyEngine {
      * Same as process() but uses a pre-loaded list of policies.
      * Used by IngestionService so user-scoped policies are evaluated.
      */
-    static async processWithPolicies(doc: DocumentObject, policies: FolioPolicy[], settings: { llm_provider?: string; llm_model?: string } = {}, baselineEntities: Record<string, unknown> = {}): Promise<ProcessingResult> {
+    static async processWithPolicies(
+        doc: DocumentObject,
+        policies: FolioPolicy[],
+        settings: { llm_provider?: string; llm_model?: string } = {},
+        baselineEntities: Record<string, unknown> = {},
+        opts: ProcessWithPoliciesOptions = {}
+    ): Promise<ProcessingResult> {
         logger.info(`Processing document with ${policies.length} policies: ${doc.filePath}`);
         const globalTrace: TraceLog[] = [{ timestamp: new Date().toISOString(), step: "Loaded user policies", details: { count: policies.length } }];
         Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "Loaded user policies", count: policies.length }, doc.supabase);
+        const forcedPolicyId = opts.forcedPolicyId?.trim();
 
         for (const policy of policies) {
+            if (forcedPolicyId && policy.metadata.id !== forcedPolicyId) {
+                continue;
+            }
+
             try {
-                const matched = await matchPolicy(policy, doc, globalTrace, settings);
+                const isManualOverride = forcedPolicyId === policy.metadata.id;
+                const matched = isManualOverride ? true : await matchPolicy(policy, doc, globalTrace, settings);
                 if (!matched) continue;
 
-                logger.info(`Matched policy: ${policy.metadata.id}`);
-                const extractedData = await extractData(policy.spec.extract ?? [], doc, globalTrace, settings);
-                const hasSheetAppendAction = (policy.spec.actions ?? []).some((action) => action.type === "append_to_google_sheet");
-                const enrichmentData = hasSheetAppendAction
-                    ? await extractEnrichmentData(doc, extractedData, globalTrace, settings)
-                    : {};
-                const extractedForStorage = attachEnrichment(extractedData, enrichmentData);
-
-                const missingRequired = (policy.spec.extract ?? [])
-                    .filter((f) => f.required && extractedData[f.key] == null)
-                    .map((f) => f.key);
-
-                if (missingRequired.length > 0) {
-                    globalTrace.push({ timestamp: new Date().toISOString(), step: "Missing required fields", details: { missingRequired } });
-                    Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Data Extraction", { action: "Missing required fields", missingRequired }, doc.supabase);
-                    return {
-                        filePath: doc.filePath,
-                        matchedPolicy: policy.metadata.id,
-                        extractedData: extractedForStorage,
-                        actionsExecuted: [],
-                        status: "error",
-                        error: `Missing required fields: ${missingRequired.join(", ")}`,
-                        trace: globalTrace
-                    };
+                if (isManualOverride) {
+                    globalTrace.push({
+                        timestamp: new Date().toISOString(),
+                        step: "Manual override policy selected",
+                        details: { policyId: policy.metadata.id, policyName: policy.metadata.name },
+                    });
+                    Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Policy Matching", {
+                        action: "Manual override policy selected",
+                        policyId: policy.metadata.id,
+                        policyName: policy.metadata.name,
+                    }, doc.supabase);
                 }
 
-                const actuatorResult = await Actuator.execute(
-                    doc.ingestionId,
-                    doc.userId,
-                    policy.spec.actions ?? [],
-                    toActionData({ ...baselineEntities, ...extractedData }),
-                    { path: doc.filePath, name: doc.filePath.split('/').pop() || doc.filePath },
-                    policy.spec.extract ?? [],
-                    doc.supabase
+                logger.info(`Matched policy: ${policy.metadata.id}${isManualOverride ? " (manual override)" : ""}`);
+                return executeMatchedPolicy(
+                    policy,
+                    doc,
+                    globalTrace,
+                    settings,
+                    baselineEntities,
+                    isManualOverride ? "manual_override" : "rules"
                 );
-
-                globalTrace.push(...actuatorResult.trace);
-
-                return {
-                    filePath: doc.filePath,
-                    matchedPolicy: policy.metadata.id,
-                    extractedData: extractedForStorage,
-                    actionsExecuted: actuatorResult.actionsExecuted,
-                    status: "matched",
-                    error: actuatorResult.errors[0],
-                    trace: globalTrace
-                };
             } catch (err) {
                 logger.error(`Error evaluating policy ${policy.metadata.id}`, { err });
+            }
+        }
+
+        const allowLearnedFallback = opts.allowLearnedFallback !== false && !forcedPolicyId;
+        if (allowLearnedFallback && doc.supabase && policies.length > 0) {
+            try {
+                const learningText = doc.text.replace(/\[VLM_IMAGE_DATA:[^\]]+\]/g, "");
+                const learned = await PolicyLearningService.resolveLearnedCandidate({
+                    supabase: doc.supabase,
+                    userId: doc.userId,
+                    policyIds: policies.map((policy) => policy.metadata.id),
+                    filePath: doc.filePath,
+                    baselineEntities,
+                    documentText: learningText,
+                });
+
+                if (learned) {
+                    const learnedPolicy = policies.find((policy) => policy.metadata.id === learned.policyId);
+                    if (learnedPolicy) {
+                        globalTrace.push({
+                            timestamp: new Date().toISOString(),
+                            step: "Learned policy candidate selected",
+                            details: {
+                                policyId: learned.policyId,
+                                score: learned.score,
+                                support: learned.support,
+                            },
+                        });
+                        Actuator.logEvent(doc.ingestionId, doc.userId, "analysis", "Policy Matching", {
+                            action: "Learned policy candidate selected",
+                            policyId: learned.policyId,
+                            score: learned.score,
+                            support: learned.support,
+                        }, doc.supabase);
+                        logger.info(`Matched policy via learned fallback: ${learned.policyId} (score=${learned.score.toFixed(3)}, support=${learned.support})`);
+                        return executeMatchedPolicy(learnedPolicy, doc, globalTrace, settings, baselineEntities, "learned");
+                    }
+                }
+            } catch (learningError) {
+                logger.warn("Learned fallback lookup failed", { error: learningError });
             }
         }
 

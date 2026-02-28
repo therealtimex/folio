@@ -3,7 +3,7 @@ import { createLogger } from "../logger.js";
 
 const logger = createLogger("ActionUtils");
 
-export type ExtractedData = Record<string, string | number | null>;
+export type ExtractedData = Record<string, unknown>;
 
 export type ActionInput = {
     type: string;
@@ -163,7 +163,8 @@ export function deriveVariables(
 
     // Populate raw extracted values as strings
     for (const [k, v] of Object.entries(data)) {
-        if (v != null) vars[k] = String(v);
+        const serialized = toTemplateString(v);
+        if (serialized !== undefined) vars[k] = serialized;
     }
 
     // Run transformers

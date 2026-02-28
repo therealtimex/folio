@@ -183,7 +183,24 @@ function toSheetRef(name: string): string {
 }
 
 function isA1CoordinateRange(value: string): boolean {
-    return /^[A-Za-z]+\d*(?::[A-Za-z]+\d*)?$/.test(value) || /^\d+(?::\d+)?$/.test(value);
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+
+    // Row-based references: "1", "1:10"
+    if (/^\d+(?::\d+)?$/.test(trimmed)) return true;
+
+    // Column range references: "A:Z", "AA:AZ", "$A:$Z"
+    if (/^\$?[A-Za-z]{1,4}\$?(?::\$?[A-Za-z]{1,4}\$?)$/.test(trimmed)) return true;
+
+    // Cell / partial references: "A1", "A1:B20", "A1:B", "A:B20", "$A$1:$B$20"
+    if (/^\$?[A-Za-z]{1,4}\$?\d+(?::\$?[A-Za-z]{1,4}\$?\d*)?$/.test(trimmed)) return true;
+    if (/^\$?[A-Za-z]{1,4}\$?(?::\$?[A-Za-z]{1,4}\$?\d+)$/.test(trimmed)) return true;
+
+    // Single column references like "A", "AA" are valid A1,
+    // but long alphabetic strings are usually sheet names (e.g. "Transaction").
+    if (/^\$?[A-Za-z]{1,4}\$?$/.test(trimmed)) return true;
+
+    return false;
 }
 
 function extractSheetRef(range: string): string | null {
@@ -213,6 +230,11 @@ function isDefaultSheetRef(sheetRef: string): boolean {
 function applySheetRefToRange(range: string, sheetRef: string): string {
     const trimmed = range.trim();
     if (!trimmed) return sheetRef;
+
+    // If caller already passed the target sheet title as a bare range, keep it as-is.
+    if (normalizeSheetRefForComparison(trimmed) === normalizeSheetRefForComparison(sheetRef)) {
+        return sheetRef;
+    }
 
     const bang = trimmed.indexOf("!");
     if (bang >= 0) {
