@@ -14,12 +14,18 @@ let port = "5176";
 const portIndex = args.indexOf("--port");
 if (portIndex !== -1 && args[portIndex + 1]) {
   port = args[portIndex + 1];
+} else {
+  const portArg = args.find(a => a.startsWith("--port="));
+  if (portArg) {
+    port = portArg.split("=")[1];
+  }
 }
 
 const noUi = args.includes("--no-ui");
 
 console.log("🚀 Folio starting...");
 console.log(`📡 Port: ${port}`);
+console.log(`🔗 UI URL: http://localhost:${port}`);
 if (noUi) console.log("🖥️  Mode: No-UI");
 
 const distServerPath = join(__dirname, "..", "dist", "api", "server.js");

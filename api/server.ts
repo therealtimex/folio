@@ -112,7 +112,7 @@ if (existsSync(path.join(distUiPath, "index.html"))) {
 app.use(errorHandler);
 
 const server = app.listen(config.port, () => {
-  logger.info("Folio API started", {
+  logger.info(`Folio API started. UI accessible at http://localhost:${config.port}`, {
     port: config.port,
     environment: config.nodeEnv,
     packageRoot: config.packageRoot

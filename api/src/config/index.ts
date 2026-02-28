@@ -43,6 +43,14 @@ function parseArgs(args: string[]): { port: number | null; noUi: boolean } {
     if (!Number.isNaN(candidate) && candidate > 0 && candidate < 65536) {
       port = candidate;
     }
+  } else {
+    const portArg = args.find(a => a.startsWith("--port="));
+    if (portArg) {
+      const candidate = Number.parseInt(portArg.split("=")[1], 10);
+      if (!Number.isNaN(candidate) && candidate > 0 && candidate < 65536) {
+        port = candidate;
+      }
+    }
   }
 
   return {

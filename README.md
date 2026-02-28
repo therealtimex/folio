@@ -29,6 +29,7 @@ Folio is designed to be run locally on your machine while securely syncing data 
    ```bash
    npx @realtimex/folio@latest --port 5176
    ```
+   *(You can change the `--port` to any available port you prefer).*
 2. **Configure your Database:**
    Follow the Setup Wizard in your browser. You can use **Zero-Config Cloud Provisioning** to automatically set up a secure Supabase project, or manually provide an existing Supabase URL and Key.
 3. **Connect your Integrations:**
