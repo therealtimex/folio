@@ -40,8 +40,8 @@ export class Actuator {
     }
 
     static async logEvent(
-        ingestionId: string,
-        userId: string,
+        ingestionId: string | null,
+        userId: string | null,
         eventType: "info" | "action" | "error" | "analysis",
         state: string,
         details: any,
@@ -58,8 +58,8 @@ export class Actuator {
         }
 
         void supabase.from("processing_events").insert({
-            ingestion_id: ingestionId,
-            user_id: userId,
+            ingestion_id: ingestionId ?? null,
+            user_id: userId ?? null,
             event_type: eventType,
             agent_state: state,
             details,

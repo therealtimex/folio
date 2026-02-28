@@ -94,6 +94,7 @@ export interface UserSettings {
   user_id: string;
   llm_provider: string | null;
   llm_model: string | null;
+  vision_model_capabilities: Record<string, unknown> | null;
   sync_interval_minutes: number;
   created_at: string;
   updated_at: string;

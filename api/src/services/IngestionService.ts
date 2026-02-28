@@ -6,8 +6,10 @@ import { PolicyLoader } from "./PolicyLoader.js";
 import { PolicyEngine } from "./PolicyEngine.js";
 import { BaselineConfigService } from "./BaselineConfigService.js";
 import { Actuator } from "../utils/Actuator.js";
+import { extractLlmResponse, previewLlmText } from "../utils/llmResponse.js";
 import { RAGService } from "./RAGService.js";
 import { SDKService } from "./SDKService.js";
+import { ModelCapabilityService } from "./ModelCapabilityService.js";
 
 const logger = createLogger("IngestionService");
 
@@ -83,6 +85,121 @@ export interface Ingestion {
 }
 
 export class IngestionService {
+    private static valueToSemanticText(value: unknown): string {
+        if (value == null) return "";
+        if (Array.isArray(value)) {
+            return value
+                .map((item) => this.valueToSemanticText(item))
+                .filter(Boolean)
+                .join(", ");
+        }
+        if (typeof value === "object") {
+            try {
+                return JSON.stringify(value);
+            } catch {
+                return String(value);
+            }
+        }
+        return String(value);
+    }
+
+    private static buildVlmSemanticText(opts: {
+        filename: string;
+        finalStatus: string;
+        policyName?: string;
+        extracted: Record<string, unknown>;
+        tags: string[];
+    }): string {
+        const { filename, finalStatus, policyName, extracted, tags } = opts;
+        const lines: string[] = [
+            `Document filename: ${filename}`,
+            "Document source: VLM image extraction",
+            `Processing status: ${finalStatus}`,
+        ];
+
+        if (policyName) {
+            lines.push(`Matched policy: ${policyName}`);
+        }
+        if (tags.length > 0) {
+            lines.push(`Tags: ${tags.join(", ")}`);
+        }
+
+        const fieldLines = Object.entries(extracted)
+            .map(([key, value]) => ({ key, value: this.valueToSemanticText(value).trim() }))
+            .filter((entry) => entry.value.length > 0)
+            .slice(0, 80)
+            .map((entry) => `- ${entry.key}: ${entry.value}`);
+
+        if (fieldLines.length > 0) {
+            lines.push("Extracted fields:");
+            lines.push(...fieldLines);
+        } else {
+            lines.push("Extracted fields: none");
+        }
+
+        lines.push("Synthetic semantic text generated from VLM output for retrieval.");
+        return lines.join("\n");
+    }
+
+    private static countExtractedSemanticFields(extracted: Record<string, unknown>): number {
+        return Object.values(extracted)
+            .map((value) => this.valueToSemanticText(value).trim())
+            .filter((value) => value.length > 0).length;
+    }
+
+    private static queueVlmSemanticEmbedding(opts: {
+        ingestionId: string;
+        userId: string;
+        filename: string;
+        finalStatus: string;
+        policyName?: string;
+        extracted: Record<string, unknown>;
+        tags: string[];
+        supabase: SupabaseClient;
+        embedSettings: { embedding_provider?: string; embedding_model?: string };
+    }): { synthetic_chars: number; extracted_fields: number; tags_count: number } {
+        const syntheticText = this.buildVlmSemanticText({
+            filename: opts.filename,
+            finalStatus: opts.finalStatus,
+            policyName: opts.policyName,
+            extracted: opts.extracted,
+            tags: opts.tags,
+        });
+        const details = {
+            synthetic_chars: syntheticText.length,
+            extracted_fields: this.countExtractedSemanticFields(opts.extracted),
+            tags_count: opts.tags.length,
+        };
+
+        Actuator.logEvent(opts.ingestionId, opts.userId, "analysis", "RAG Embedding", {
+            action: "Queued synthetic VLM embedding",
+            ...details,
+        }, opts.supabase);
+
+        RAGService.chunkAndEmbed(
+            opts.ingestionId,
+            opts.userId,
+            syntheticText,
+            opts.supabase,
+            opts.embedSettings
+        ).then(() => {
+            Actuator.logEvent(opts.ingestionId, opts.userId, "analysis", "RAG Embedding", {
+                action: "Completed synthetic VLM embedding",
+                ...details,
+            }, opts.supabase);
+        }).catch((err) => {
+            logger.error(`RAG embedding failed for synthetic VLM text ${opts.ingestionId}`, err);
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            Actuator.logEvent(opts.ingestionId, opts.userId, "error", "RAG Embedding", {
+                action: "Synthetic VLM embedding failed",
+                error: errorMessage,
+                ...details,
+            }, opts.supabase);
+        });
+
+        return details;
+    }
+
     /**
      * Ingest a document using Hybrid Routing Architecture.
      */
@@ -155,12 +272,46 @@ export class IngestionService {
 
         // 2. Document Triage
         let isFastPath = false;
+        let isVlmFastPath = false;
         let extractionContent = content;
         const ext = filename.toLowerCase().split('.').pop() || '';
         const fastExts = ['txt', 'md', 'csv', 'json'];
+        const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
+
+        // Pre-fetch settings to decide whether we should attempt VLM.
+        const { data: triageSettingsRow } = await supabase
+            .from("user_settings")
+            .select("llm_provider, llm_model, embedding_provider, embedding_model, vision_model_capabilities")
+            .eq("user_id", userId)
+            .maybeSingle();
+        const visionResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow);
+        const llmModel = visionResolution.model;
+        const llmProvider = visionResolution.provider;
 
         if (fastExts.includes(ext)) {
             isFastPath = true;
+        } else if (imageExts.includes(ext) && visionResolution.shouldAttempt) {
+            try {
+                const buffer = await fs.readFile(filePath);
+                const base64 = buffer.toString('base64');
+                const mimeTypeActual = mimeType || `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+                // Special marker for PolicyEngine
+                extractionContent = `[VLM_IMAGE_DATA:data:${mimeTypeActual};base64,${base64}]`;
+                isFastPath = true;
+                isVlmFastPath = true;
+                logger.info(`Smart Triage: Image ${filename} routed to Fast Path using native VLM (${llmModel}).`);
+                Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "VLM Fast Path selected", type: ext, model: llmModel }, supabase);
+            } catch (err) {
+                logger.warn(`Failed to read VLM image ${filename}. Routing to Heavy Path.`, { err });
+            }
+        } else if (imageExts.includes(ext)) {
+            logger.info(`Smart Triage: Image ${filename} kept on Heavy Path because ${llmProvider}/${llmModel} is marked vision-unsupported.`);
+            Actuator.logEvent(ingestion.id, userId, "info", "Triage", {
+                action: "VLM skipped (model marked unsupported)",
+                type: ext,
+                model: llmModel,
+                provider: llmProvider
+            }, supabase);
         } else if (ext === 'pdf') {
             try {
                 const buffer = await fs.readFile(filePath);
@@ -184,20 +335,21 @@ export class IngestionService {
         if (isFastPath) {
             try {
                 // 3. Fast Path — fetch all dependencies in parallel
-                const [userPolicies, settingsRow, baselineConfig] = await Promise.all([
+                const [userPolicies, processingSettingsRow, baselineConfig] = await Promise.all([
                     PolicyLoader.load(false, supabase),
                     supabase.from("user_settings").select("llm_provider, llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
                     BaselineConfigService.getActive(supabase, userId),
                 ]);
                 const llmSettings = {
-                    llm_provider: settingsRow.data?.llm_provider ?? undefined,
-                    llm_model: settingsRow.data?.llm_model ?? undefined,
+                    llm_provider: processingSettingsRow.data?.llm_provider ?? undefined,
+                    llm_model: processingSettingsRow.data?.llm_model ?? undefined,
                 };
                 const embedSettings = {
-                    embedding_provider: settingsRow.data?.embedding_provider ?? undefined,
-                    embedding_model: settingsRow.data?.embedding_model ?? undefined,
+                    embedding_provider: processingSettingsRow.data?.embedding_provider ?? undefined,
+                    embedding_model: processingSettingsRow.data?.embedding_model ?? undefined,
                 };
                 const doc = { filePath: filePath, text: extractionContent, ingestionId: ingestion.id, userId, supabase };
+                const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
 
                 // Fire and forget Semantic Embedding Storage
                 RAGService.chunkAndEmbed(ingestion.id, userId, doc.text, supabase, embedSettings).catch(err => {
@@ -205,11 +357,32 @@ export class IngestionService {
                 });
 
                 // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
-                const { entities: baselineEntities, tags: autoTags } = await PolicyEngine.extractBaseline(
+                baselineTrace.push({
+                    timestamp: new Date().toISOString(),
+                    step: "LLM request (baseline extraction)",
+                    details: {
+                        provider: llmSettings.llm_provider ?? llmProvider,
+                        model: llmSettings.llm_model ?? llmModel,
+                        mode: isVlmFastPath ? "vision" : "text",
+                    }
+                });
+
+                const baselineResult = await PolicyEngine.extractBaseline(
                     doc,
                     { context: baselineConfig?.context, fields: baselineConfig?.fields },
                     llmSettings
                 );
+                const baselineEntities = baselineResult.entities;
+                const autoTags = baselineResult.tags;
+                baselineTrace.push({
+                    timestamp: new Date().toISOString(),
+                    step: "LLM response (baseline extraction)",
+                    details: {
+                        entities_count: Object.keys(baselineEntities).length,
+                        uncertain_count: baselineResult.uncertain_fields.length,
+                        tags_count: autoTags.length,
+                    }
+                });
 
                 // Enrich the document with extracted entities so policy keyword/semantic
                 // conditions can match against semantic field values (e.g. document_type:
@@ -235,6 +408,7 @@ export class IngestionService {
                 // Merge: baseline entities are the foundation; policy-specific fields
                 // are overlaid on top so more precise extractions take precedence.
                 const mergedExtracted = { ...baselineEntities, ...result.extractedData };
+                let finalTrace = [...baselineTrace, ...(result.trace || [])];
 
                 const { data: updatedIngestion } = await supabase
                     .from("ingestions")
@@ -244,7 +418,7 @@ export class IngestionService {
                         policy_name: policyName,
                         extracted: mergedExtracted,
                         actions_taken: result.actionsExecuted,
-                        trace: result.trace,
+                        trace: finalTrace,
                         tags: autoTags,
                         baseline_config_id: baselineConfig?.id ?? null,
                     })
@@ -252,49 +426,103 @@ export class IngestionService {
                     .select()
                     .single();
 
+                if (isVlmFastPath) {
+                    const embeddingMeta = this.queueVlmSemanticEmbedding({
+                        ingestionId: ingestion.id,
+                        userId,
+                        filename,
+                        finalStatus,
+                        policyName,
+                        extracted: mergedExtracted,
+                        tags: autoTags,
+                        supabase,
+                        embedSettings,
+                    });
+                    finalTrace = [
+                        ...finalTrace,
+                        {
+                            timestamp: new Date().toISOString(),
+                            step: "Queued synthetic VLM embedding",
+                            details: embeddingMeta,
+                        }
+                    ];
+                    await supabase
+                        .from("ingestions")
+                        .update({ trace: finalTrace })
+                        .eq("id", ingestion.id);
+                }
+
+                if (isVlmFastPath) {
+                    await ModelCapabilityService.learnVisionSuccess({
+                        supabase,
+                        userId,
+                        provider: llmSettings.llm_provider ?? llmProvider,
+                        model: llmSettings.llm_model ?? llmModel,
+                    });
+                }
+
                 return updatedIngestion as Ingestion;
 
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
-                Actuator.logEvent(ingestion.id, userId, "error", "Processing", { error: msg }, supabase);
-                const { data: updatedIngestion } = await supabase
-                    .from("ingestions")
-                    .update({ status: "error", error_message: msg })
-                    .eq("id", ingestion.id)
-                    .select()
-                    .single();
-                return updatedIngestion as Ingestion;
+
+                if (isVlmFastPath) {
+                    const learnedState = await ModelCapabilityService.learnVisionFailure({
+                        supabase,
+                        userId,
+                        provider: llmProvider,
+                        model: llmModel,
+                        error: err,
+                    });
+                    logger.warn(`VLM extraction failed for ${filename}. Falling back to Heavy Path. Error: ${msg}`);
+                    Actuator.logEvent(ingestion.id, userId, "error", "Processing", {
+                        action: "VLM Failed, Fallback to Heavy",
+                        error: msg,
+                        learned_state: learnedState,
+                    }, supabase);
+                    // Fall back to Heavy Path
+                    isFastPath = false;
+                } else {
+                    Actuator.logEvent(ingestion.id, userId, "error", "Processing", { error: msg }, supabase);
+                    const { data: updatedIngestion } = await supabase
+                        .from("ingestions")
+                        .update({ status: "error", error_message: msg })
+                        .eq("id", ingestion.id)
+                        .select()
+                        .single();
+                    return updatedIngestion as Ingestion;
+                }
             }
-        } else {
-            // 4. Heavy Path (Delegate to RealTimeX)
-            const { error: rtxErr } = await supabase
-                .from("rtx_activities")
-                .insert({
-                    user_id: userId,
-                    status: "pending", // Waiting for RealTimeX
-                    raw_data: {
-                        source,
-                        filename,
-                        mime_type: mimeType,
-                        file_size: fileSize,
-                        file_path: filePath,
-                        ingestion_id: ingestion.id
-                    }
-                });
-
-            if (rtxErr) {
-                logger.error(`Failed to delegate to rtx_activities`, { rtxErr });
-            }
-
-            const { data: pendingIngestion } = await supabase
-                .from("ingestions")
-                .update({ status: "pending" }) // UI shows pending
-                .eq("id", ingestion.id)
-                .select()
-                .single();
-
-            return pendingIngestion as Ingestion;
         }
+
+        // 4. Heavy Path (Delegate to RealTimeX)
+        const { error: rtxErr } = await supabase
+            .from("rtx_activities")
+            .insert({
+                user_id: userId,
+                status: "pending", // Waiting for RealTimeX
+                raw_data: {
+                    source,
+                    filename,
+                    mime_type: mimeType,
+                    file_size: fileSize,
+                    file_path: filePath,
+                    ingestion_id: ingestion.id
+                }
+            });
+
+        if (rtxErr) {
+            logger.error(`Failed to delegate to rtx_activities`, { rtxErr });
+        }
+
+        const { data: pendingIngestion } = await supabase
+            .from("ingestions")
+            .update({ status: "pending" }) // UI shows pending
+            .eq("id", ingestion.id)
+            .select()
+            .single();
+
+        return pendingIngestion as Ingestion;
     }
 
     /**
@@ -322,13 +550,45 @@ export class IngestionService {
         if (!filePath) throw new Error("No storage path found for this ingestion");
 
         let isFastPath = false;
+        let isVlmFastPath = false;
         let extractionContent = "";
         const ext = filename.toLowerCase().split('.').pop() || '';
         const fastExts = ['txt', 'md', 'csv', 'json'];
+        const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
+
+        const { data: triageSettingsRow } = await supabase
+            .from("user_settings")
+            .select("llm_provider, llm_model, embedding_provider, embedding_model, vision_model_capabilities")
+            .eq("user_id", userId)
+            .maybeSingle();
+        const visionResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow);
+        const llmModel = visionResolution.model;
+        const llmProvider = visionResolution.provider;
 
         if (fastExts.includes(ext)) {
             isFastPath = true;
             extractionContent = await fs.readFile(filePath, "utf-8");
+        } else if (imageExts.includes(ext) && visionResolution.shouldAttempt) {
+            try {
+                const buffer = await fs.readFile(filePath);
+                const base64 = buffer.toString('base64');
+                const mimeTypeActual = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+                extractionContent = `[VLM_IMAGE_DATA:data:${mimeTypeActual};base64,${base64}]`;
+                isFastPath = true;
+                isVlmFastPath = true;
+                logger.info(`Smart Triage: Re-run image ${filename} routed to Fast Path using native VLM (${llmModel}).`);
+                Actuator.logEvent(ingestionId, userId, "info", "Triage", { action: "VLM Fast Path selected", type: ext, model: llmModel }, supabase);
+            } catch (err) {
+                logger.warn(`Failed to read VLM image ${filename} during rerun. Routing to Heavy Path.`, { err });
+            }
+        } else if (imageExts.includes(ext)) {
+            logger.info(`Smart Triage: Re-run image ${filename} kept on Heavy Path because ${llmProvider}/${llmModel} is marked vision-unsupported.`);
+            Actuator.logEvent(ingestionId, userId, "info", "Triage", {
+                action: "VLM skipped (model marked unsupported)",
+                type: ext,
+                model: llmModel,
+                provider: llmProvider
+            }, supabase);
         } else if (ext === 'pdf') {
             try {
                 const buffer = await fs.readFile(filePath);
@@ -344,31 +604,53 @@ export class IngestionService {
         }
 
         if (isFastPath) {
-            const [userPolicies, settingsRow, baselineConfig] = await Promise.all([
+            const [userPolicies, processingSettingsRow, baselineConfig] = await Promise.all([
                 PolicyLoader.load(false, supabase),
                 supabase.from("user_settings").select("llm_provider, llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
                 BaselineConfigService.getActive(supabase, userId),
             ]);
             const llmSettings = {
-                llm_provider: settingsRow.data?.llm_provider ?? undefined,
-                llm_model: settingsRow.data?.llm_model ?? undefined,
+                llm_provider: processingSettingsRow.data?.llm_provider ?? undefined,
+                llm_model: processingSettingsRow.data?.llm_model ?? undefined,
             };
             const embedSettings = {
-                embedding_provider: settingsRow.data?.embedding_provider ?? undefined,
-                embedding_model: settingsRow.data?.embedding_model ?? undefined,
+                embedding_provider: processingSettingsRow.data?.embedding_provider ?? undefined,
+                embedding_model: processingSettingsRow.data?.embedding_model ?? undefined,
             };
             const doc = { filePath, text: extractionContent, ingestionId, userId, supabase };
+            const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
 
             // Fire and forget Semantic Embedding Storage for re-runs
             RAGService.chunkAndEmbed(ingestionId, userId, doc.text, supabase, embedSettings).catch(err => {
                 logger.error(`RAG embedding failed during rerun for ${ingestionId}`, err);
             });
 
-            const { entities: baselineEntities, tags: autoTags } = await PolicyEngine.extractBaseline(
+            baselineTrace.push({
+                timestamp: new Date().toISOString(),
+                step: "LLM request (baseline extraction)",
+                details: {
+                    provider: llmSettings.llm_provider ?? llmProvider,
+                    model: llmSettings.llm_model ?? llmModel,
+                    mode: isVlmFastPath ? "vision" : "text",
+                }
+            });
+
+            const baselineResult = await PolicyEngine.extractBaseline(
                 doc,
                 { context: baselineConfig?.context, fields: baselineConfig?.fields },
                 llmSettings
             );
+            const baselineEntities = baselineResult.entities;
+            const autoTags = baselineResult.tags;
+            baselineTrace.push({
+                timestamp: new Date().toISOString(),
+                step: "LLM response (baseline extraction)",
+                details: {
+                    entities_count: Object.keys(baselineEntities).length,
+                    uncertain_count: baselineResult.uncertain_fields.length,
+                    tags_count: autoTags.length,
+                }
+            });
 
             const entityLines = Object.entries(baselineEntities)
                 .filter(([, v]) => v != null)
@@ -377,64 +659,125 @@ export class IngestionService {
                 ? { ...doc, text: doc.text + "\n\n[Extracted fields]\n" + entityLines.join("\n") }
                 : doc;
 
-            let result;
-            if (userPolicies.length > 0) {
-                result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings, baselineEntities);
-            } else {
-                result = await PolicyEngine.process(enrichedDoc, llmSettings, baselineEntities);
-            }
+            let finalStatus = "no_match";
+            let result: import("./PolicyEngine.js").ProcessingResult;
+            let policyName;
+            try {
+                if (userPolicies.length > 0) {
+                    result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings, baselineEntities);
+                } else {
+                    result = await PolicyEngine.process(enrichedDoc, llmSettings, baselineEntities);
+                }
 
-            const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
-            const finalStatus = result.status === "fallback" ? "no_match" : result.status;
-            const mergedExtracted = { ...baselineEntities, ...result.extractedData };
+                policyName = result.matchedPolicy ? userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name : undefined;
+                finalStatus = result.status === "fallback" ? "no_match" : result.status;
+                const mergedExtracted = { ...baselineEntities, ...result.extractedData };
 
-            // Preserve any human-added tags; merge with freshly generated auto-tags.
-            const existingTags: string[] = Array.isArray(ingestion.tags) ? ingestion.tags : [];
-            const mergedTags = [...new Set([...autoTags, ...existingTags])];
+                // Preserve any human-added tags; merge with freshly generated auto-tags.
+                const existingTags: string[] = Array.isArray(ingestion.tags) ? ingestion.tags : [];
+                const mergedTags = [...new Set([...autoTags, ...existingTags])];
+                let rerunTrace = [
+                    ...(ingestion.trace || []),
+                    { timestamp: new Date().toISOString(), step: "--- Re-run Initiated ---" },
+                    ...baselineTrace,
+                    ...(result.trace || [])
+                ];
 
-            await supabase
-                .from("ingestions")
-                .update({
-                    status: finalStatus,
-                    policy_id: result.matchedPolicy,
-                    policy_name: policyName,
-                    extracted: mergedExtracted,
-                    actions_taken: result.actionsExecuted,
-                    trace: [
-                        ...(ingestion.trace || []),
-                        { timestamp: new Date().toISOString(), step: "--- Re-run Initiated ---" },
-                        ...(result.trace || [])
-                    ],
-                    tags: mergedTags,
-                    baseline_config_id: baselineConfig?.id ?? null,
-                })
-                .eq("id", ingestionId);
+                await supabase
+                    .from("ingestions")
+                    .update({
+                        status: finalStatus,
+                        policy_id: result.matchedPolicy,
+                        policy_name: policyName,
+                        extracted: mergedExtracted,
+                        actions_taken: result.actionsExecuted,
+                        trace: rerunTrace,
+                        tags: mergedTags,
+                        baseline_config_id: baselineConfig?.id ?? null,
+                    })
+                    .eq("id", ingestionId);
 
-            return finalStatus === "matched";
-        } else {
-            // Re-delegate to rtx_activities
-            await supabase
-                .from("rtx_activities")
-                .insert({
-                    user_id: userId,
-                    status: "pending",
-                    raw_data: {
-                        source: ingestion.source,
+                if (isVlmFastPath) {
+                    const embeddingMeta = this.queueVlmSemanticEmbedding({
+                        ingestionId,
+                        userId,
                         filename,
-                        mime_type: ingestion.mime_type,
-                        file_size: ingestion.file_size,
-                        file_path: filePath,
-                        ingestion_id: ingestion.id
-                    }
-                });
+                        finalStatus,
+                        policyName,
+                        extracted: mergedExtracted,
+                        tags: mergedTags,
+                        supabase,
+                        embedSettings,
+                    });
+                    rerunTrace = [
+                        ...rerunTrace,
+                        {
+                            timestamp: new Date().toISOString(),
+                            step: "Queued synthetic VLM embedding",
+                            details: embeddingMeta,
+                        }
+                    ];
+                    await supabase
+                        .from("ingestions")
+                        .update({ trace: rerunTrace })
+                        .eq("id", ingestionId);
+                }
 
-            await supabase
-                .from("ingestions")
-                .update({ status: "pending" })
-                .eq("id", ingestionId);
+                if (isVlmFastPath) {
+                    await ModelCapabilityService.learnVisionSuccess({
+                        supabase,
+                        userId,
+                        provider: llmSettings.llm_provider ?? llmProvider,
+                        model: llmSettings.llm_model ?? llmModel,
+                    });
+                }
 
-            return true;
+                return finalStatus === "matched";
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                if (isVlmFastPath) {
+                    const learnedState = await ModelCapabilityService.learnVisionFailure({
+                        supabase,
+                        userId,
+                        provider: llmProvider,
+                        model: llmModel,
+                        error: err,
+                    });
+                    logger.warn(`VLM extraction failed during rerun for ${filename}. Falling back to Heavy Path. Error: ${msg}`);
+                    Actuator.logEvent(ingestionId, userId, "error", "Processing", {
+                        action: "VLM Failed, Fallback to Heavy",
+                        error: msg,
+                        learned_state: learnedState,
+                    }, supabase);
+                    isFastPath = false; // Trigger heavy path fallthrough
+                } else {
+                    throw err; // Re-throw to caller
+                }
+            }
         }
+
+        // Re-delegate to rtx_activities
+        await supabase
+            .from("rtx_activities")
+            .insert({
+                user_id: userId,
+                status: "pending",
+                raw_data: {
+                    source: ingestion.source,
+                    filename,
+                    mime_type: ingestion.mime_type,
+                    file_size: ingestion.file_size,
+                    file_path: filePath,
+                    ingestion_id: ingestion.id
+                }
+            });
+
+        await supabase
+            .from("ingestions")
+            .update({ status: "pending" })
+            .eq("id", ingestionId);
+
+        return true;
     }
 
     /**
@@ -549,6 +892,13 @@ export class IngestionService {
             entityLines.join("\n");
 
         try {
+            Actuator.logEvent(id, userId, "analysis", "Summary Generation", {
+                action: "LLM request (summary generation)",
+                provider,
+                model,
+                extracted_fields_count: entityLines.length,
+                filename: ing.filename,
+            }, supabase);
             const result = await sdk.llm.chat(
                 [
                     {
@@ -563,12 +913,14 @@ export class IngestionService {
                 { provider, model }
             );
 
-            const summary: string =
-                (result as any).response?.content ??
-                (result as any).content ??
-                (result as any).message?.content ??
-                (result as any).choices?.[0]?.message?.content ??
-                "";
+            const summary: string = extractLlmResponse(result);
+            Actuator.logEvent(id, userId, "analysis", "Summary Generation", {
+                action: "LLM response (summary generation)",
+                provider,
+                model,
+                raw_length: summary.length,
+                raw_preview: previewLlmText(summary),
+            }, supabase);
 
             if (!summary.trim()) return null;
 
@@ -583,6 +935,13 @@ export class IngestionService {
             return summary;
         } catch (err) {
             logger.error("Summary generation failed", { err });
+            const msg = err instanceof Error ? err.message : String(err);
+            Actuator.logEvent(id, userId, "error", "Summary Generation", {
+                action: "LLM summary generation failed",
+                provider,
+                model,
+                error: msg,
+            }, supabase);
             return null;
         }
     }

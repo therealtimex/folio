@@ -32,6 +32,7 @@ router.patch("/", asyncHandler(async (req, res) => {
     }
 
     const body = req.body;
+    const rawVisionMap = body.vision_model_capabilities;
     const payload = {
         llm_provider: body.llm_provider,
         llm_model: body.llm_model,
@@ -44,6 +45,9 @@ router.patch("/", asyncHandler(async (req, res) => {
         embedding_provider: body.embedding_provider,
         embedding_model: body.embedding_model,
         storage_path: body.storage_path,
+        vision_model_capabilities: rawVisionMap && typeof rawVisionMap === "object" && !Array.isArray(rawVisionMap)
+            ? rawVisionMap
+            : undefined,
         google_client_id: body.google_client_id,
         google_client_secret: body.google_client_secret,
         microsoft_client_id: body.microsoft_client_id,

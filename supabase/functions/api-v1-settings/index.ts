@@ -25,6 +25,7 @@ Deno.serve(async (req: Request) => {
 
     if (req.method === "PATCH") {
       const body = await req.json();
+      const rawVisionMap = body.vision_model_capabilities;
       const payload = {
         llm_provider: body.llm_provider,
         llm_model: body.llm_model,
@@ -35,9 +36,11 @@ Deno.serve(async (req: Request) => {
         tts_speed: body.tts_speed,
         tts_quality: body.tts_quality,
         embedding_provider: body.embedding_provider,
-        embedding_provider: body.embedding_provider,
         embedding_model: body.embedding_model,
-        storage_path: body.storage_path
+        storage_path: body.storage_path,
+        vision_model_capabilities: rawVisionMap && typeof rawVisionMap === "object" && !Array.isArray(rawVisionMap)
+          ? rawVisionMap
+          : undefined
       };
 
       const { data, error } = await client

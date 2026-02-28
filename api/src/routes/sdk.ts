@@ -1,8 +1,11 @@
 import { Router, Request, Response } from "express";
 import { SDKService } from "../services/SDKService.js";
 import { ProvidersResponse } from "@realtimex/sdk";
+import { createLogger } from "../utils/logger.js";
+import { extractLlmResponse, previewLlmText } from "../utils/llmResponse.js";
 
 const router = Router();
+const logger = createLogger("SDKRoutes");
 
 /**
  * GET /api/sdk/providers/chat
@@ -67,10 +70,18 @@ router.post("/test-llm", async (req: Request, res: Response) => {
             llm_model
         });
 
+        logger.info("LLM request (sdk test-llm)", { provider, model });
         const response = await sdk.llm.chat(
             [{ role: "user", content: "Say OK" }],
             { provider, model }
         );
+        const raw = extractLlmResponse(response);
+        logger.info("LLM response (sdk test-llm)", {
+            provider,
+            model,
+            raw_length: raw.length,
+            raw_preview: previewLlmText(raw),
+        });
 
         if (response.success) {
             res.json({ success: true, message: `Connected to ${provider}/${model}` });
@@ -78,6 +89,7 @@ router.post("/test-llm", async (req: Request, res: Response) => {
             res.json({ success: false, message: response.error || "Failed to connect to LLM" });
         }
     } catch (error: any) {
+        logger.error("LLM sdk test failed", { error: error?.message ?? String(error) });
         res.json({ success: false, message: error.message });
     }
 });

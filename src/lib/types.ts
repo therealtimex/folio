@@ -40,6 +40,13 @@ export interface UserSettings {
   // Embedding Settings
   embedding_provider?: string | null;
   embedding_model?: string | null;
+  // Learned vision capability map keyed by "provider:model"
+  vision_model_capabilities?: Record<string, {
+    state: "supported" | "unsupported";
+    learned_at: string;
+    expires_at?: string;
+    reason?: string;
+  }>;
   // BYOK
   google_client_id?: string;
   google_client_secret?: string;

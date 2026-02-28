@@ -2,6 +2,8 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import { SDKService } from "./SDKService.js";
 import { RAGService, RetrievedChunk } from "./RAGService.js";
 import { createLogger } from "../utils/logger.js";
+import { Actuator } from "../utils/Actuator.js";
+import { extractLlmResponse, previewLlmText } from "../utils/llmResponse.js";
 
 const logger = createLogger("ChatService");
 
@@ -11,13 +13,6 @@ export interface Message {
     content: string;
     context_sources?: RetrievedChunk[];
     created_at: string;
-}
-
-interface CompletionShape {
-    response?: { content?: string };
-    content?: string;
-    message?: { content?: string };
-    choices?: Array<{ message?: { content?: string } }>;
 }
 
 export class ChatService {
@@ -123,18 +118,48 @@ export class ChatService {
             throw new Error("RealTimeX SDK not available");
         }
 
-        const completion = await sdk.llm.chat(messagesForLLM, {
-            provider: chatProvider.provider,
-            model: chatProvider.model,
-            temperature: 0.3
-        }) as CompletionShape;
+        let replyContent = "I am unable to process that request.";
+        try {
+            Actuator.logEvent(null, userId, "analysis", "Chat", {
+                action: "LLM request (chat response)",
+                session_id: sessionId,
+                provider: chatProvider.provider,
+                model: chatProvider.model,
+                messages_count: messagesForLLM.length,
+                context_sources_count: contextSources.length,
+            }, supabase);
 
-        const replyContent: string =
-            completion.response?.content ??
-            completion.content ??
-            completion.message?.content ??
-            completion.choices?.[0]?.message?.content ??
-            "I am unable to process that request.";
+            const completion = await sdk.llm.chat(messagesForLLM, {
+                provider: chatProvider.provider,
+                model: chatProvider.model,
+                temperature: 0.3
+            });
+
+            const raw = extractLlmResponse(completion);
+            Actuator.logEvent(null, userId, "analysis", "Chat", {
+                action: "LLM response (chat response)",
+                session_id: sessionId,
+                provider: chatProvider.provider,
+                model: chatProvider.model,
+                raw_length: raw.length,
+                raw_preview: previewLlmText(raw),
+            }, supabase);
+
+            if (raw.trim()) {
+                replyContent = raw;
+            }
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            logger.error(`Chat completion failed for session ${sessionId}`, { error: err });
+            Actuator.logEvent(null, userId, "error", "Chat", {
+                action: "LLM chat failed",
+                session_id: sessionId,
+                provider: chatProvider.provider,
+                model: chatProvider.model,
+                error: msg,
+            }, supabase);
+            throw err;
+        }
 
         // 8. Save Assistant Reply
         const { data: aiMsg, error: aiMsgErr } = await supabase.from("chat_messages")

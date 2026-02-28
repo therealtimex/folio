@@ -80,7 +80,12 @@ router.post(
             res.status(400).json({ success: false, error: "description is required" });
             return;
         }
-        const result = await PolicyEngine.synthesizeFromNL(description, { provider, model });
+        const result = await PolicyEngine.synthesizeFromNL(description, {
+            provider,
+            model,
+            userId: req.user?.id,
+            supabase: req.supabase,
+        });
         if (!result.policy) {
             res.status(503).json({ success: false, error: result.error ?? "Synthesis failed. SDK may be unavailable." });
             return;

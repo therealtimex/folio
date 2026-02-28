@@ -107,7 +107,12 @@ router.post(
         const activeConfig = await BaselineConfigService.getActive(req.supabase, req.user.id);
         const currentFields = activeConfig?.fields ?? DEFAULT_BASELINE_FIELDS;
 
-        const result = await PolicyEngine.suggestBaseline(description, currentFields, { provider, model });
+        const result = await PolicyEngine.suggestBaseline(description, currentFields, {
+            provider,
+            model,
+            userId: req.user.id,
+            supabase: req.supabase,
+        });
         if (!result.suggestion) {
             res.status(503).json({ success: false, error: result.error ?? "Suggestion failed. SDK may be unavailable." });
             return;

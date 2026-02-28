@@ -129,6 +129,11 @@ export class RAGService {
         supabase: SupabaseClient,
         settings?: EmbeddingSettings
     ): Promise<void> {
+        if (rawText.startsWith("[VLM_IMAGE_DATA:")) {
+            logger.info(`Skipping chunking and embedding for VLM base64 image data (Ingestion: ${ingestionId})`);
+            return;
+        }
+
         const chunks = this.chunkText(rawText);
         if (chunks.length === 0) {
             logger.info(`No text to chunk for ingestion ${ingestionId}`);
