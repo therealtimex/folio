@@ -2,7 +2,6 @@
   "name": "@realtimex/folio",
   "version": "0.1.1",
   "type": "module",
-  "private": true,
   "main": "dist/api/server.js",
   "bin": {
     "folio": "./bin/folio.js",
