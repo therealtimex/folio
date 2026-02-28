@@ -1,75 +1,63 @@
 # Folio
 
-Folio inherits the runtime foundation from `email-automator` with Folio-specific naming and no business features implemented yet.
+Folio is an intelligent document processing and automation platform that acts as your personal AI-powered filing cabinet. Powered by advanced AI and Vision-Language Models, Folio ingests your documents, understands their content, and automatically organizes them according to your custom rules.
 
-Architecture baseline:
+If you deal with invoices, receipts, reports, or any unstructured documents, Folio handles the heavy lifting of reading, extracting, and routing your data where it belongs.
 
-- Local desktop app runtime (React UI + local Express backend)
-- Remote Supabase (serverless database + Edge Functions)
-- Local processing backend wired through RealTimeX SDK
-- Unified single-port serving in desktop mode (UI + API on same port)
+## ✨ Key Features
 
-## What is included
+- **Intelligent Ingestion**: Simply drop in PDFs, images, or raw text. Folio automatically reads and extracts the context, using high-speed Vision-Language Models (VLMs) for images.
+- **Folio Policies**: Create powerful "If X, then Y" automation rules. Teach Folio to recognize specific types of documents and run actions automatically.
+- **Smart Auto-Renaming**: Say goodbye to messy file names like `scan_001.pdf`. Folio can intelligently suggest and automatically rename files based on their actual content (e.g., `2026-02-28_Amazon_Invoice.pdf`).
+- **Seamless Cloud Integrations**: 
+  - **Google Drive**: Automatically route and copy specific files into designated cloud folders.
+  - **Google Sheets**: Accurately extract tabular data (like expenses or ledger entries) and automatically append new rows directly to your spreadsheets.
+- **Semantic Search & AI Chat**: Stop hunting for files. Folio creates a dynamic semantic index (RAG) of your documents, allowing you to search by concept or chat directly with your entire document library.
+- **Transparency & Control**: Watch exactly what the AI is doing in real-time with the **LiveTerminal** trace logs. 
 
-- Project structure and build scripts
-- Env/config loading strategy
-- Local API middleware stack (auth, validation, rate-limit, error handling)
-- Dynamic Supabase connection strategy (env fallback + request header forwarding)
-- RealTimeX SDK service bootstrap
-- Setup Wizard parity flow (managed and manual setup, migration orchestration, SSE logs)
-- Setup/migrate backend routes (`/api/setup/*`, `/api/migrate`)
-- Health and processing scaffold routes
-- Baseline Supabase schema, RLS policies, and migration timestamp RPC
-- Edge function skeleton for user settings
+## 🚀 Getting Started
 
-## What is intentionally not included yet
+Folio is designed to be run locally on your machine while securely syncing data to your own designated cloud backend. 
 
-- OCR/classification/routing logic
-- Folio-specific ingestion and extraction features
-- Any production document processing behavior
+### Prerequisites
+- Node.js (v20+)
+- A [Supabase](https://supabase.com) account (for your dedicated database)
 
-## Run locally
+### Installation
+
+1. **Launch the Setup Wizard:**
+   ```bash
+   npx @realtimex/folio@latest --port 5176
+   ```
+2. **Configure your Database:**
+   Follow the Setup Wizard in your browser. You can use **Zero-Config Cloud Provisioning** to automatically set up a secure Supabase project, or manually provide an existing Supabase URL and Key.
+3. **Connect your Integrations:**
+   Head to the **Configuration** tab in the Folio dashboard to connect your local LLM providers and authorize Google Drive/Sheets.
+
+## 🛠️ For Developers
+
+Folio is highly extensible and built on a robust, modern stack:
+- **Frontend**: React + Vite + Tailwind CSS
+- **Backend / API**: Local Express Runtime + RealTimeX SDK
+- **Database**: Remote Supabase (PostgreSQL + pgvector for RAG)
+- **Extensibility**: The Action Engine is modular, allowing easy creation of new plugin handlers.
+
+### Local Development
+
+To run the full stack locally for contribution:
 
 ```bash
-cd /Users/ledangtrung/rtGit/realtimex-ai-app-agents/folio
+# Install dependencies
 npm install
+
+# Start the local API backend
 npm run dev:api
+
+# Start the frontend dev server
 npm run dev
 ```
 
-Desktop-style single-port run (same shape as RealTimeX Desktop launch):
-
+If you modify the database schema, apply migrations using:
 ```bash
-npx @realtimex/folio@latest --port 5176
+npm run migrate
 ```
-
-Local workspace equivalent:
-
-```bash
-node ./bin/folio.js --port 5176
-```
-
-## Scripts
-
-- `npm run dev` - frontend (Vite)
-- `npm run dev:api` - local backend (tsx watch)
-- `npm run build` - UI + API build
-- `npm run migrate` - push Supabase migrations/functions
-- `npm run task "Title" "Body"` - create a task for the Gemini agent (via GitHub CLI)
-
-## Setup Wizard Flow
-
-1. Open app and run Setup Wizard.
-2. Choose:
-   - Managed: provide Supabase access token, select org, auto-provision project.
-   - Manual: provide existing Supabase URL + anon key.
-3. Run migration from wizard (streamed logs from `/api/migrate`).
-4. Wizard stores Supabase config locally and unlocks foundation dashboard.
-
-## Repo layout
-
-- `src/` frontend shell + shared API/config clients
-- `api/` local backend runtime
-- `supabase/` migrations and edge functions
-- `scripts/` migration and build helpers
-- `bin/` CLI wrappers for desktop usage
