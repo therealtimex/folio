@@ -1,6 +1,6 @@
 {
   "name": "@realtimex/folio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "private": true,
   "main": "dist/api/server.js",
