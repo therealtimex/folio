@@ -12,6 +12,12 @@ export interface RetrievedChunk {
     similarity: number;
 }
 
+interface ModelScope {
+    provider: string;
+    model: string;
+    vector_dim?: number;
+}
+
 type EmbeddingSettings = { embedding_provider?: string; embedding_model?: string };
 
 interface ResolvedEmbeddingModel {
@@ -204,6 +210,69 @@ export class RAGService {
     /**
      * Semantically search the document chunks using dynamic pgvector partial indexing.
      */
+    private static async runSearchForModel(args: {
+        userId: string;
+        supabase: SupabaseClient;
+        modelScope: ModelScope;
+        queryEmbedding: number[];
+        queryDim: number;
+        similarityThreshold: number;
+        topK: number;
+    }): Promise<RetrievedChunk[]> {
+        const { userId, supabase, modelScope, queryEmbedding, queryDim, similarityThreshold, topK } = args;
+
+        const { data, error } = await supabase.rpc("search_documents", {
+            p_user_id: userId,
+            p_embedding_provider: modelScope.provider,
+            p_embedding_model: modelScope.model,
+            query_embedding: queryEmbedding,
+            match_threshold: similarityThreshold,
+            match_count: topK,
+            query_dim: queryDim
+        });
+
+        if (error) {
+            throw new Error(`Knowledge base search failed for ${modelScope.provider}/${modelScope.model}: ${error.message}`);
+        }
+
+        return (data || []) as RetrievedChunk[];
+    }
+
+    private static async listUserModelScopes(
+        userId: string,
+        supabase: SupabaseClient
+    ): Promise<ModelScope[]> {
+        const { data, error } = await supabase
+            .from("document_chunks")
+            .select("embedding_provider, embedding_model, vector_dim, created_at")
+            .eq("user_id", userId)
+            .order("created_at", { ascending: false })
+            .limit(2000);
+
+        if (error) {
+            logger.warn("Failed to list user embedding scopes for RAG fallback", { error });
+            return [];
+        }
+
+        const scopes = new Map<string, ModelScope>();
+        for (const row of data || []) {
+            const provider = String((row as any).embedding_provider || "").trim();
+            const model = String((row as any).embedding_model || "").trim();
+            const vector_dim = Number((row as any).vector_dim);
+            if (!provider || !model) continue;
+            const key = `${provider}::${model}`;
+            if (!scopes.has(key)) {
+                scopes.set(key, {
+                    provider,
+                    model,
+                    vector_dim: Number.isFinite(vector_dim) && vector_dim > 0 ? vector_dim : undefined
+                });
+            }
+        }
+
+        return Array.from(scopes.values());
+    }
+
     static async searchDocuments(
         query: string,
         userId: string,
@@ -220,29 +289,100 @@ export class RAGService {
             settings
         } = options;
 
-        const resolvedModel = await this.resolveEmbeddingModel(settings || {});
-        const queryEmbedding = await this.embedTextWithResolvedModel(query, resolvedModel);
-        const queryDim = queryEmbedding.length;
+        const minThreshold = Math.max(0.1, Math.min(similarityThreshold, 0.4));
+        const thresholdLevels = Array.from(new Set([similarityThreshold, minThreshold]));
+        const preferred = await this.resolveEmbeddingModel(settings || {});
+        const preferredScope: ModelScope = { provider: preferred.provider, model: preferred.model };
+        const embeddingCache = new Map<string, { queryEmbedding: number[]; queryDim: number }>();
 
-        logger.info(
-            `Searching knowledge base (${resolvedModel.provider}/${resolvedModel.model}, dim=${queryDim}, topK=${topK}, threshold=${similarityThreshold})`
-        );
+        const collected = new Map<string, RetrievedChunk>();
+        const trySearch = async (scope: ModelScope, threshold: number): Promise<number> => {
+            const cacheKey = `${scope.provider}::${scope.model}`;
+            let cached = embeddingCache.get(cacheKey);
+            if (!cached) {
+                const queryEmbedding = await this.embedTextWithResolvedModel(query, {
+                    provider: scope.provider,
+                    model: scope.model,
+                });
+                cached = { queryEmbedding, queryDim: queryEmbedding.length };
+                embeddingCache.set(cacheKey, cached);
+            }
+            const { queryEmbedding, queryDim } = cached;
+            if (scope.vector_dim && scope.vector_dim !== queryDim) {
+                logger.warn("Skipping model scope due to vector dimension mismatch", {
+                    scope,
+                    queryDim
+                });
+                return 0;
+            }
 
-        const { data, error } = await supabase.rpc("search_documents", {
-            p_user_id: userId,
-            p_embedding_provider: resolvedModel.provider,
-            p_embedding_model: resolvedModel.model,
-            query_embedding: queryEmbedding,
-            match_threshold: similarityThreshold,
-            match_count: topK,
-            query_dim: queryDim
-        });
+            logger.info(
+                `Searching knowledge base (${scope.provider}/${scope.model}, dim=${queryDim}, topK=${topK}, threshold=${threshold})`
+            );
 
-        if (error) {
-            logger.error("Semantic search failed", { error });
-            throw new Error(`Knowledge base search failed: ${error.message}`);
+            const hits = await this.runSearchForModel({
+                userId,
+                supabase,
+                modelScope: scope,
+                queryEmbedding,
+                queryDim,
+                similarityThreshold: threshold,
+                topK
+            });
+
+            for (const hit of hits) {
+                if (!collected.has(hit.id)) {
+                    collected.set(hit.id, hit);
+                } else {
+                    const existing = collected.get(hit.id)!;
+                    if (hit.similarity > existing.similarity) {
+                        collected.set(hit.id, hit);
+                    }
+                }
+            }
+
+            return hits.length;
+        };
+
+        try {
+            for (const threshold of thresholdLevels) {
+                const hits = await trySearch(preferredScope, threshold);
+                if (hits > 0) {
+                    break;
+                }
+            }
+        } catch (error) {
+            logger.error("Semantic search failed for preferred embedding scope", {
+                provider: preferredScope.provider,
+                model: preferredScope.model,
+                error
+            });
         }
 
-        return data as RetrievedChunk[];
+        if (collected.size === 0) {
+            const scopes = await this.listUserModelScopes(userId, supabase);
+            const fallbackScopes = scopes.filter(
+                (scope) => !(scope.provider === preferredScope.provider && scope.model === preferredScope.model)
+            );
+
+            for (const scope of fallbackScopes) {
+                try {
+                    for (const threshold of thresholdLevels) {
+                        await trySearch(scope, threshold);
+                        if (collected.size >= topK) break;
+                    }
+                } catch (error) {
+                    logger.warn("Semantic search failed for fallback embedding scope", {
+                        scope,
+                        error
+                    });
+                }
+                if (collected.size >= topK) break;
+            }
+        }
+
+        return Array.from(collected.values())
+            .sort((a, b) => b.similarity - a.similarity)
+            .slice(0, topK);
     }
 }

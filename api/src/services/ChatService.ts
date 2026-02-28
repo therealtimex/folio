@@ -62,14 +62,35 @@ export class ChatService {
         // 4. Retrieve semantic context (Dynamic RAG)
         let contextSources: RetrievedChunk[] = [];
         try {
+            Actuator.logEvent(null, userId, "analysis", "RAG Retrieval", {
+                action: "RAG query request",
+                session_id: sessionId,
+                top_k: 5,
+                threshold: 0.65,
+                embedding_provider: embedSettings.embedding_provider ?? "auto",
+                embedding_model: embedSettings.embedding_model ?? "auto",
+                query_preview: content.slice(0, 180),
+            }, supabase);
             contextSources = await RAGService.searchDocuments(
                 content,
                 userId,
                 supabase,
                 { topK: 5, similarityThreshold: 0.65, settings: embedSettings }
             );
+            Actuator.logEvent(null, userId, "analysis", "RAG Retrieval", {
+                action: "RAG query response",
+                session_id: sessionId,
+                hits: contextSources.length,
+                top_similarity: contextSources[0]?.similarity ?? null,
+                ingestion_ids: Array.from(new Set(contextSources.map((c) => c.ingestion_id))).slice(0, 5),
+            }, supabase);
         } catch (err) {
             logger.warn(`Semantic search failed during chat. Proceeding without context.`, { error: err });
+            Actuator.logEvent(null, userId, "error", "RAG Retrieval", {
+                action: "RAG query failed",
+                session_id: sessionId,
+                error: err instanceof Error ? err.message : String(err),
+            }, supabase);
         }
 
         // 5. Fetch Chat History
