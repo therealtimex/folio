@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, type ReactNode } from "react";
 import { Minimize2, Terminal as TerminalIcon, ShieldAlert, Cpu, Activity, Play, CheckCircle2, Brain, FileDigit, Settings2 } from "lucide-react";
 import { getSupabaseClient } from "../lib/supabase-config";
 import { useTerminal } from "../context/TerminalContext";
@@ -12,6 +12,125 @@ export type ProcessingEvent = {
     details: any;
     created_at: string;
 };
+
+type ErrorRemediationLink = {
+    label: string;
+    url: string;
+};
+
+type ErrorRemediation = {
+    title?: string;
+    summary?: string;
+    code?: string;
+    steps: string[];
+    links: ErrorRemediationLink[];
+};
+
+const URL_PATTERN = /(https?:\/\/[^\s<>"'`]+)/g;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeUrl(value: unknown): string | null {
+    if (typeof value !== "string" || value.trim().length === 0) {
+        return null;
+    }
+    try {
+        const parsed = new URL(value.trim());
+        if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            return null;
+        }
+        return parsed.toString();
+    } catch {
+        return null;
+    }
+}
+
+function extractRemediation(details: unknown): ErrorRemediation | null {
+    if (!isRecord(details) || !isRecord(details.remediation)) {
+        return null;
+    }
+
+    const remediation = details.remediation;
+    const title = typeof remediation.title === "string" ? remediation.title.trim() : "";
+    const summary = typeof remediation.summary === "string" ? remediation.summary.trim() : "";
+    const code = typeof remediation.code === "string" ? remediation.code.trim() : "";
+
+    const steps = Array.isArray(remediation.steps)
+        ? remediation.steps
+            .filter((step): step is string => typeof step === "string")
+            .map((step) => step.trim())
+            .filter(Boolean)
+        : [];
+
+    const links = Array.isArray(remediation.links)
+        ? remediation.links
+            .filter(isRecord)
+            .map((link) => {
+                const url = normalizeUrl(link.url);
+                if (!url) return null;
+                const label = typeof link.label === "string" && link.label.trim().length > 0
+                    ? link.label.trim()
+                    : "Open help link";
+                return { label, url };
+            })
+            .filter((link): link is ErrorRemediationLink => link !== null)
+        : [];
+
+    if (!title && !summary && !code && steps.length === 0 && links.length === 0) {
+        return null;
+    }
+
+    return {
+        ...(title ? { title } : {}),
+        ...(summary ? { summary } : {}),
+        ...(code ? { code } : {}),
+        steps,
+        links,
+    };
+}
+
+function renderTextWithLinks(text: string) {
+    const nodes: ReactNode[] = [];
+    let cursor = 0;
+
+    for (const match of text.matchAll(URL_PATTERN)) {
+        const raw = match[0] ?? "";
+        const start = match.index ?? 0;
+        const end = start + raw.length;
+
+        if (start > cursor) {
+            nodes.push(<span key={`txt-${cursor}-${start}`}>{text.slice(cursor, start)}</span>);
+        }
+
+        const url = normalizeUrl(raw);
+        if (url) {
+            nodes.push(
+                <a
+                    key={`url-${start}-${url}`}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline underline-offset-2 decoration-current/50 hover:decoration-current"
+                    onClick={(event) => event.stopPropagation()}
+                >
+                    {url}
+                </a>
+            );
+        } else {
+            nodes.push(<span key={`txt-${start}-${end}`}>{raw}</span>);
+        }
+
+        cursor = end;
+    }
+
+    if (cursor < text.length) {
+        nodes.push(<span key={`txt-${cursor}-${text.length}`}>{text.slice(cursor)}</span>);
+    }
+
+    return nodes.length > 0 ? <>{nodes}</> : text;
+}
 
 export function LiveTerminal() {
     const supabase = getSupabaseClient();
@@ -152,8 +271,18 @@ export function LiveTerminal() {
         return state || 'System';
     };
 
-    const formatMessage = (event: ProcessingEvent) => {
-        return event.details?.action || event.details?.error || JSON.stringify(event.details);
+    const formatMessage = (event: ProcessingEvent): string => {
+        const direct = event.details?.action || event.details?.error;
+        if (typeof direct === "string" && direct.trim().length > 0) {
+            return direct;
+        }
+
+        const serialized = JSON.stringify(event.details);
+        if (typeof serialized === "string" && serialized.trim().length > 0) {
+            return serialized;
+        }
+
+        return "Event received.";
     };
 
 
@@ -214,6 +343,7 @@ export function LiveTerminal() {
                 ) : (
                     events.map((event) => {
                         const isErrOpen = expandedErrors.has(event.id);
+                        const remediation = extractRemediation(event.details);
 
                         return (
                             <div
@@ -240,8 +370,46 @@ export function LiveTerminal() {
                                         </div>
 
                                         <div className="leading-relaxed break-words whitespace-pre-wrap">
-                                            {formatMessage(event)}
+                                            {renderTextWithLinks(formatMessage(event))}
                                         </div>
+
+                                        {event.event_type === "error" && remediation && (
+                                            <div className="mt-2 rounded border border-amber-400/30 bg-amber-500/10 px-2.5 py-2 text-[10px] text-amber-100 space-y-1.5">
+                                                <p className="font-semibold uppercase tracking-wider text-[9px] text-amber-200">Suggested Fix</p>
+                                                {remediation.title && (
+                                                    <p className="font-semibold text-amber-100">{renderTextWithLinks(remediation.title)}</p>
+                                                )}
+                                                {remediation.summary && (
+                                                    <p className="text-amber-100/90">{renderTextWithLinks(remediation.summary)}</p>
+                                                )}
+                                                {remediation.code && (
+                                                    <p className="text-amber-200/90">Code: {remediation.code}</p>
+                                                )}
+                                                {remediation.steps.length > 0 && (
+                                                    <ol className="list-decimal pl-4 space-y-1 text-amber-100/90">
+                                                        {remediation.steps.map((step) => (
+                                                            <li key={`${event.id}-fix-step-${step}-${step.length}`}>{renderTextWithLinks(step)}</li>
+                                                        ))}
+                                                    </ol>
+                                                )}
+                                                {remediation.links.length > 0 && (
+                                                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                                                        {remediation.links.map((link) => (
+                                                            <a
+                                                                key={`${event.id}-fix-link-${link.url}`}
+                                                                href={link.url}
+                                                                target="_blank"
+                                                                rel="noreferrer"
+                                                                className="inline-flex items-center rounded border border-amber-300/40 px-2 py-1 text-[9px] font-semibold uppercase tracking-wider text-amber-100 hover:bg-amber-300/10"
+                                                                onClick={(eventClick) => eventClick.stopPropagation()}
+                                                            >
+                                                                {link.label}
+                                                            </a>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
 
                                         {/* Action / Error Details Block */}
                                         {event.event_type !== 'info' && event.details && Object.keys(event.details).length > (event.details.action ? 1 : 0) && (

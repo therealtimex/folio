@@ -23,6 +23,7 @@ export interface ActionResult {
     logs: string[];
     trace: TraceLog[];
     error?: string;
+    errorDetails?: Record<string, unknown>;
 }
 
 export interface ActionHandler {

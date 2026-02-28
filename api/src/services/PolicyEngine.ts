@@ -96,6 +96,102 @@ function parseLlmJson<T = any>(raw: unknown): T | null {
     }
 }
 
+type SynthesisTargetHints = {
+    driveFolderId?: string;
+    sheetReference?: string;
+    range?: string;
+};
+
+function hasText(value: unknown): value is string {
+    return typeof value === "string" && value.trim().length > 0;
+}
+
+function stripTrailingPunctuation(value: string): string {
+    return value.replace(/[),.;]+$/g, "");
+}
+
+function extractSynthesisTargetHints(description: string): SynthesisTargetHints {
+    const hints: SynthesisTargetHints = {};
+
+    const gidMatch = description.match(/\b(?:gid|sheetid|sheet_id)\s*[:=]\s*(\d+)\b/i);
+    const gid = gidMatch?.[1];
+
+    const urlMatch = description.match(/https?:\/\/docs\.google\.com\/spreadsheets\/d\/[^\s)]+/i);
+    if (urlMatch?.[0]) {
+        const cleaned = stripTrailingPunctuation(urlMatch[0]);
+        if (gid && !/[\?#]gid=\d+/i.test(cleaned)) {
+            hints.sheetReference = `${cleaned}#gid=${gid}`;
+        } else {
+            hints.sheetReference = cleaned;
+        }
+    } else {
+        const sheetIdMatch = description.match(/google\s*sheet(?:s)?(?:\s*(?:id|:))?[^A-Za-z0-9_-]*([A-Za-z0-9-_]{20,})/i);
+        if (sheetIdMatch?.[1]) {
+            hints.sheetReference = gid
+                ? `https://docs.google.com/spreadsheets/d/${sheetIdMatch[1]}/edit#gid=${gid}`
+                : sheetIdMatch[1];
+        }
+    }
+
+    const rangeMatch = description.match(/\brange\s*(?:is|=|:)?\s*([A-Za-z0-9_'"-]+![A-Za-z]+\d*(?::[A-Za-z]+\d*)?)/i);
+    if (rangeMatch?.[1]) {
+        hints.range = rangeMatch[1].trim();
+    }
+
+    const driveMatch = description.match(/\b(?:google\s*drive|gdrive|gdriver)?\s*folder(?:\s*id)?\s*(?:is|=|:)?\s*([A-Za-z0-9_-]{20,})\b/i);
+    if (driveMatch?.[1]) {
+        hints.driveFolderId = driveMatch[1];
+    }
+
+    return hints;
+}
+
+function applySynthesisTargetHints(policy: FolioPolicy, hints: SynthesisTargetHints): FolioPolicy {
+    if (!policy || typeof policy !== "object" || !policy.spec || typeof policy.spec !== "object") {
+        return policy;
+    }
+
+    const spec = policy.spec as { actions?: any[] };
+    if (!Array.isArray(spec.actions)) {
+        spec.actions = [];
+    }
+    const actions = spec.actions;
+
+    if (hasText(hints.driveFolderId)) {
+        const driveAction = actions.find((action) => action?.type === "copy_to_gdrive");
+        if (driveAction) {
+            if (!hasText(driveAction.destination)) {
+                driveAction.destination = hints.driveFolderId;
+            }
+        } else {
+            actions.push({
+                type: "copy_to_gdrive",
+                destination: hints.driveFolderId,
+            });
+        }
+    }
+
+    if (hasText(hints.sheetReference)) {
+        const sheetAction = actions.find((action) => action?.type === "append_to_google_sheet");
+        if (sheetAction) {
+            if (!hasText(sheetAction.spreadsheet_id) && !hasText(sheetAction.spreadsheet_url)) {
+                sheetAction.spreadsheet_id = hints.sheetReference;
+            }
+            if (hasText(hints.range) && !hasText(sheetAction.range)) {
+                sheetAction.range = hints.range;
+            }
+        } else {
+            actions.push({
+                type: "append_to_google_sheet",
+                spreadsheet_id: hints.sheetReference,
+                ...(hasText(hints.range) ? { range: hints.range } : {}),
+            });
+        }
+    }
+
+    return policy;
+}
+
 // ─── Matcher ────────────────────────────────────────────────────────────────
 
 async function evaluateCondition(condition: MatchCondition, doc: DocumentObject, trace: TraceLog[], settings: { llm_provider?: string; llm_model?: string } = {}): Promise<boolean> {
@@ -735,6 +831,7 @@ Rules:
         const provider = opts.provider || defaults.provider;
         const model = opts.model || defaults.model;
         logger.info(`Synthesizing policy via ${provider}/${model}`);
+        const targetHints = extractSynthesisTargetHints(description);
 
         const systemPrompt = `You are a Folio Policy Engine expert. Convert natural language descriptions into a valid FolioPolicy JSON object.
 
@@ -748,7 +845,24 @@ Return ONLY a valid JSON object with this exact shape (no markdown, no backticks
     "extract": [{ "key": "field_name", "type": "string", "description": "what to extract", "required": true }],
     "actions": [{ "type": "copy", "destination": "/path/to/folder" }]
   }
-}`;
+}
+
+Supported action types include:
+- copy, rename, auto_rename, copy_to_gdrive, append_to_google_sheet, log_csv, notify, webhook
+- For append_to_google_sheet use:
+  { "type": "append_to_google_sheet", "spreadsheet_id": "<sheet-id-or-url>", "range": "Sheet1!A:Z", "columns": ["{date}","{issuer}"] }
+- columns is optional; if omitted, runtime auto-maps extracted fields to sheet headers dynamically.
+- Never omit user-provided external targets (folder IDs, spreadsheet URLs/IDs, ranges); preserve them exactly in actions.`;
+
+        const targetHintsBlock = [
+            hasText(targetHints.driveFolderId) ? `- Google Drive Folder ID: ${targetHints.driveFolderId}` : null,
+            hasText(targetHints.sheetReference) ? `- Google Sheet: ${targetHints.sheetReference}` : null,
+            hasText(targetHints.range) ? `- Preferred range: ${targetHints.range}` : null,
+        ].filter(Boolean).join("\n");
+
+        const synthesisRequest = targetHintsBlock
+            ? `Create a policy for: ${description}\n\nRequired target values to preserve exactly:\n${targetHintsBlock}`
+            : `Create a policy for: ${description}`;
 
         try {
             if (opts.userId) {
@@ -762,7 +876,7 @@ Return ONLY a valid JSON object with this exact shape (no markdown, no backticks
             const result = await sdk.llm.chat(
                 [
                     { role: "system", content: systemPrompt },
-                    { role: "user", content: `Create a policy for: ${description}` }
+                    { role: "user", content: synthesisRequest }
                 ],
                 { provider, model }
             );
@@ -795,13 +909,15 @@ Return ONLY a valid JSON object with this exact shape (no markdown, no backticks
                 return { policy: null, error: "LLM response was not valid JSON", raw };
             }
 
-            if (PolicyLoader.validate(parsed)) {
-                return { policy: parsed };
+            const repaired = applySynthesisTargetHints(parsed, targetHints);
+
+            if (PolicyLoader.validate(repaired)) {
+                return { policy: repaired };
             }
 
             // Return as draft even if validation fails — let the UI show a preview
             logger.warn("Synthesized policy failed strict validation, returning as draft");
-            return { policy: parsed, error: "Policy schema may be incomplete — please review before saving" };
+            return { policy: repaired, error: "Policy schema may be incomplete — please review before saving" };
 
         } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

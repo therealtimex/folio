@@ -25,7 +25,7 @@ export interface ExtractField {
     transformers?: { name: string; as: string }[];
 }
 
-export type ActionType = "rename" | "auto_rename" | "copy" | "copy_to_gdrive" | "log_csv" | "notify" | "webhook";
+export type ActionType = "rename" | "auto_rename" | "copy" | "copy_to_gdrive" | "append_to_google_sheet" | "log_csv" | "notify" | "webhook";
 
 export interface PolicyAction {
     type: ActionType;
@@ -34,6 +34,9 @@ export interface PolicyAction {
     filename?: string;
     path?: string;
     columns?: string[];
+    spreadsheet_id?: string;
+    spreadsheet_url?: string;
+    range?: string;
     message?: string;
 }
 

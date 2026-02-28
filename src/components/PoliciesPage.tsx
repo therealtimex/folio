@@ -46,6 +46,9 @@ interface PolicyAction {
     filename?: string;
     path?: string;
     columns?: string[];
+    spreadsheet_id?: string;
+    spreadsheet_url?: string;
+    range?: string;
 }
 
 interface FolioPolicy {
@@ -103,6 +106,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
     const [description, setDescription] = useState("");
     const [isSynthesizing, setIsSynthesizing] = useState(false);
     const [synthesizedPolicy, setSynthesizedPolicy] = useState<FolioPolicy | null>(null);
+    const [showSynthesizedJson, setShowSynthesizedJson] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [expandedId, setExpandedId] = useState<string | null>(null);
     const [activeTab, setActiveTab] = useState<"policies" | "packs">("policies");
@@ -118,7 +122,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
         description: "",
         keywords: "",
         matchStrategy: "ANY" as "ANY" | "ALL",
-        actions: [{ type: "copy" as "copy" | "rename" | "auto_rename" | "log_csv" | "copy_to_gdrive", destination: "", filename: "" }],
+        actions: [{ type: "copy" as "copy" | "rename" | "auto_rename" | "log_csv" | "copy_to_gdrive" | "append_to_google_sheet", destination: "", filename: "", columns: [] as string[], spreadsheet_id: "", range: "" }],
         tags: "",
         priority: 100,
     });
@@ -181,6 +185,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             });
             if (resp?.data?.policy) {
                 setSynthesizedPolicy(resp.data.policy);
+                setShowSynthesizedJson(false);
                 const warning = (resp.data as any).warning;
                 if (warning) toast.warning(warning);
                 else toast.success("Policy synthesized! Review and save below.");
@@ -283,7 +288,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
         toast.success("Policies reloaded.");
     };
 
-    const updateQuickAction = (index: number, field: "type" | "destination" | "filename", value: string) => {
+    const updateQuickAction = (index: number, field: "type" | "destination" | "filename" | "columns" | "spreadsheet_id" | "range", value: unknown) => {
         setQuickForm((prev) => {
             const actions = prev.actions.map((a, i) =>
                 i === index ? { ...a, [field]: value } : a
@@ -295,7 +300,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
     const addQuickAction = () => {
         setQuickForm((prev) => ({
             ...prev,
-            actions: [...prev.actions, { type: "copy" as const, destination: "", filename: "" }],
+            actions: [...prev.actions, { type: "copy" as const, destination: "", filename: "", columns: [], spreadsheet_id: "", range: "" }],
         }));
     };
 
@@ -306,8 +311,18 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
         }));
     };
 
+    const isInvalidAppendAction = (action: (typeof quickForm.actions)[number]) =>
+        action.type === "append_to_google_sheet" && !action.spreadsheet_id?.trim();
+
+    const hasInvalidAppendAction = quickForm.actions.some(isInvalidAppendAction);
+
     const handleQuickCreate = async () => {
         if (!quickForm.name.trim()) return;
+        const invalidAppendActionIndex = quickForm.actions.findIndex(isInvalidAppendAction);
+        if (invalidAppendActionIndex !== -1) {
+            toast.error(`Action #${invalidAppendActionIndex + 1}: "Append to Google Sheet" requires Spreadsheet ID or Google Sheet URL.`);
+            return;
+        }
         setIsQuickSaving(true);
         try {
             const id = quickForm.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
@@ -315,7 +330,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             const tags = quickForm.tags.split(",").map((t) => t.trim()).filter(Boolean);
 
             const builtActions: PolicyAction[] = quickForm.actions
-                .filter((a) => a.type === "copy_to_gdrive" || a.type === "auto_rename" || a.destination.trim())
+                .filter((a) => a.type === "copy_to_gdrive" || a.type === "auto_rename" || a.type === "append_to_google_sheet" || a.destination.trim())
                 .map((a) => {
                     const action: PolicyAction = { type: a.type };
                     if (a.type === "copy") {
@@ -332,6 +347,13 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                         if (a.filename) action.filename = a.filename;
                     } else if (a.type === "log_csv") {
                         action.path = a.destination;
+                    } else if (a.type === "append_to_google_sheet") {
+                        const spreadsheetReference = a.spreadsheet_id?.trim();
+                        if (spreadsheetReference) action.spreadsheet_id = spreadsheetReference;
+                        const configuredRange = a.range?.trim();
+                        if (configuredRange) action.range = configuredRange;
+                        const configuredColumns = (a.columns ?? []).map((column) => column.trim()).filter(Boolean);
+                        if (configuredColumns.length > 0) action.columns = configuredColumns;
                     }
                     return action;
                 });
@@ -360,7 +382,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             await api.savePolicy?.(policy, sessionToken);
             toast.success(`Policy "${policy.metadata.name}" created.`);
             setShowQuickCreate(false);
-            setQuickForm({ name: "", description: "", keywords: "", matchStrategy: "ANY", actions: [{ type: "copy", destination: "", filename: "" }], tags: "", priority: 100 });
+            setQuickForm({ name: "", description: "", keywords: "", matchStrategy: "ANY", actions: [{ type: "copy", destination: "", filename: "", columns: [], spreadsheet_id: "", range: "" }], tags: "", priority: 100 });
             await fetchPolicies();
         } catch {
             toast.error("Failed to create policy.");
@@ -368,6 +390,70 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
             setIsQuickSaving(false);
         }
     };
+
+    const formatActionSummary = (action: PolicyAction): string => {
+        if (action.type === "append_to_google_sheet") {
+            const sheetRef = action.spreadsheet_id?.trim() || action.spreadsheet_url?.trim() || "";
+            const range = action.range?.trim() || "";
+            if (sheetRef && range) return `${sheetRef} (${range})`;
+            return sheetRef || range;
+        }
+        if (action.type === "log_csv") {
+            return action.path?.trim() || "";
+        }
+        return action.destination?.trim() || action.pattern?.trim() || "";
+    };
+
+    const updateSynthesizedAction = (index: number, patch: Partial<PolicyAction>) => {
+        setSynthesizedPolicy((prev) => {
+            if (!prev) return prev;
+            const actions = (prev.spec.actions ?? []).map((action, actionIndex) =>
+                actionIndex === index ? { ...action, ...patch } : action
+            );
+            return {
+                ...prev,
+                spec: {
+                    ...prev.spec,
+                    actions,
+                },
+            };
+        });
+    };
+
+    const getSynthesizedPolicyIssues = (policy: FolioPolicy | null): string[] => {
+        if (!policy) return [];
+
+        const issues: string[] = [];
+        if (!policy.metadata.name?.trim()) issues.push("Policy name is missing.");
+        if (!policy.metadata.id?.trim()) issues.push("Policy id is missing.");
+
+        const actions = policy.spec.actions ?? [];
+        if (actions.length === 0) {
+            issues.push("At least one action is required.");
+        }
+
+        actions.forEach((action, idx) => {
+            if (action.type === "append_to_google_sheet") {
+                const sheetRef = action.spreadsheet_id?.trim() || action.spreadsheet_url?.trim();
+                if (!sheetRef) {
+                    issues.push(`Action #${idx + 1} append_to_google_sheet is missing spreadsheet_id / URL.`);
+                }
+            }
+
+            if (action.type === "copy" && !action.destination?.trim()) {
+                issues.push(`Action #${idx + 1} copy is missing destination.`);
+            }
+
+            if (action.type === "rename" && !(action.pattern?.trim() || action.destination?.trim())) {
+                issues.push(`Action #${idx + 1} rename is missing pattern.`);
+            }
+        });
+
+        return issues;
+    };
+
+    const synthesizedIssues = getSynthesizedPolicyIssues(synthesizedPolicy);
+    const canSaveSynthesizedPolicy = !!synthesizedPolicy && synthesizedIssues.length === 0 && !isSaving;
 
 
     return (
@@ -484,25 +570,110 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                         Priority {synthesizedPolicy.metadata.priority}
                                     </Badge>
                                 </div>
-                                <div className="grid grid-cols-3 gap-3 text-xs text-muted-foreground">
+                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-muted-foreground">
                                     <div className="rounded-lg bg-muted/60 p-2">
                                         <div className="font-bold uppercase tracking-widest text-[9px] mb-1 text-foreground">Match</div>
-                                        <div>{synthesizedPolicy.spec.match.conditions.length} condition(s)</div>
+                                        <div className="space-y-1">
+                                            {synthesizedPolicy.spec.match.conditions.length === 0 && <div>—</div>}
+                                            {synthesizedPolicy.spec.match.conditions.map((cond, idx) => (
+                                                <div key={`${cond.type}-${idx}`}>
+                                                    <span className="font-mono bg-muted px-1 rounded text-[10px]">{cond.type}</span>
+                                                    {" "}
+                                                    {Array.isArray(cond.value) ? cond.value.join(", ") : cond.value}
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                     <div className="rounded-lg bg-muted/60 p-2">
                                         <div className="font-bold uppercase tracking-widest text-[9px] mb-1 text-foreground">Extract</div>
-                                        <div>{synthesizedPolicy.spec.extract?.length ?? 0} field(s)</div>
+                                        <div className="space-y-1">
+                                            {(synthesizedPolicy.spec.extract?.length ?? 0) === 0 && <div>—</div>}
+                                            {synthesizedPolicy.spec.extract?.map((field) => (
+                                                <div key={field.key}>
+                                                    <span className="font-mono bg-muted px-1 rounded text-[10px]">{field.key}</span>
+                                                    {" "}
+                                                    ({field.type}){field.required ? " *" : ""}
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                     <div className="rounded-lg bg-muted/60 p-2">
                                         <div className="font-bold uppercase tracking-widest text-[9px] mb-1 text-foreground">Actions</div>
-                                        <div>{synthesizedPolicy.spec.actions?.length ?? 0} action(s)</div>
+                                        <div className="space-y-2">
+                                            {(synthesizedPolicy.spec.actions?.length ?? 0) === 0 && <div>—</div>}
+                                            {synthesizedPolicy.spec.actions?.map((action, index) => (
+                                                <div key={`${action.type}-${index}`} className="rounded-md border border-border/50 bg-background/80 p-2 space-y-1.5">
+                                                    <div>
+                                                        <span className="font-mono bg-muted px-1 rounded text-[10px]">{action.type}</span>
+                                                        {" "}
+                                                        {formatActionSummary(action)}
+                                                    </div>
+                                                    {action.type === "copy_to_gdrive" && (
+                                                        <Input
+                                                            value={action.destination ?? ""}
+                                                            onChange={(e) => updateSynthesizedAction(index, { destination: e.target.value })}
+                                                            placeholder="Google Drive folder ID"
+                                                            className="h-7 text-[11px] rounded-lg font-mono"
+                                                        />
+                                                    )}
+                                                    {action.type === "append_to_google_sheet" && (
+                                                        <div className="space-y-1.5">
+                                                            <Input
+                                                                value={action.spreadsheet_id ?? action.spreadsheet_url ?? ""}
+                                                                onChange={(e) => updateSynthesizedAction(index, { spreadsheet_id: e.target.value, spreadsheet_url: undefined })}
+                                                                placeholder="Spreadsheet ID or URL"
+                                                                className="h-7 text-[11px] rounded-lg font-mono"
+                                                            />
+                                                            <Input
+                                                                value={action.range ?? ""}
+                                                                onChange={(e) => updateSynthesizedAction(index, { range: e.target.value })}
+                                                                placeholder="Optional range (e.g. Sheet1!A:Z)"
+                                                                className="h-7 text-[11px] rounded-lg font-mono"
+                                                            />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
+                                {synthesizedIssues.length > 0 ? (
+                                    <Alert className="rounded-xl border-red-200 bg-red-50">
+                                        <AlertDescription className="text-xs text-red-700">
+                                            <div className="font-semibold mb-1">Fix before saving:</div>
+                                            <div className="space-y-0.5">
+                                                {synthesizedIssues.map((issue, idx) => (
+                                                    <div key={`synth-issue-${idx}`}>{issue}</div>
+                                                ))}
+                                            </div>
+                                        </AlertDescription>
+                                    </Alert>
+                                ) : (
+                                    <div className="text-[11px] text-emerald-700 font-semibold">
+                                        Policy looks valid for save.
+                                    </div>
+                                )}
+                                <div className="flex gap-2">
+                                    <Button
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => setShowSynthesizedJson((v) => !v)}
+                                        className="h-7 px-2 rounded-lg text-[10px] uppercase tracking-widest"
+                                    >
+                                        {showSynthesizedJson ? "Hide JSON" : "Show JSON"}
+                                    </Button>
+                                </div>
+                                {showSynthesizedJson && (
+                                    <pre className="rounded-lg border border-border/40 bg-background p-3 text-[11px] overflow-auto max-h-72 whitespace-pre-wrap font-mono">
+                                        {JSON.stringify(synthesizedPolicy, null, 2)}
+                                    </pre>
+                                )}
                                 <div className="flex gap-2 pt-1">
                                     <Button
                                         size="sm"
                                         onClick={() => handleSavePolicy(synthesizedPolicy)}
-                                        disabled={isSaving}
+                                        disabled={!canSaveSynthesizedPolicy}
                                         className="flex-1 h-8 rounded-xl font-black text-[10px] uppercase tracking-widest"
                                     >
                                         {isSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : "Save Policy"}
@@ -510,7 +681,10 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                     <Button
                                         size="sm"
                                         variant="outline"
-                                        onClick={() => setSynthesizedPolicy(null)}
+                                        onClick={() => {
+                                            setSynthesizedPolicy(null);
+                                            setShowSynthesizedJson(false);
+                                        }}
                                         className="h-8 px-3 rounded-xl"
                                     >
                                         Discard
@@ -607,58 +781,136 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                                 const filenameMode = !action.filename || action.filename === "" ? "original" : action.filename === "auto" ? "auto" : "custom";
                                                 return (
                                                     <div key={i} className="space-y-1.5">
-                                                        <div className="flex gap-2 items-center">
+                                                        <div className="grid grid-cols-[9rem_minmax(0,1fr)] gap-2 items-start">
                                                             <select
                                                                 value={action.type}
                                                                 onChange={(e) => updateQuickAction(i, "type", e.target.value)}
-                                                                className="h-8 text-xs rounded-xl border border-border/40 bg-background px-2 text-foreground w-36 shrink-0"
+                                                                className="h-8 text-xs rounded-xl border border-border/40 bg-background px-2 text-foreground w-full"
                                                             >
                                                                 <option value="copy">Copy to folder</option>
                                                                 <option value="rename">Rename file (Pattern)</option>
                                                                 <option value="log_csv">Log to CSV</option>
                                                                 <option value="copy_to_gdrive">Copy to Google Drive</option>
+                                                                <option value="append_to_google_sheet">Append to Google Sheet</option>
                                                             </select>
-                                                            <Input
-                                                                placeholder={action.type === "copy" ? "/Car/" : action.type === "copy_to_gdrive" ? "Folder ID (empty = My Drive root)" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
-                                                                value={action.destination}
-                                                                onChange={(e) => updateQuickAction(i, "destination", e.target.value)}
-                                                                className="h-8 text-xs rounded-xl border-border/40 bg-background font-mono flex-1"
-                                                            />
-                                                            {quickForm.actions.length > 1 && (
-                                                                <button
-                                                                    type="button"
-                                                                    onClick={() => removeQuickAction(i)}
-                                                                    className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-1"
-                                                                >
-                                                                    <X className="w-3.5 h-3.5" />
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                        {(action.type === "copy" || action.type === "copy_to_gdrive") && (
-                                                            <div className="flex gap-2 items-center pl-[152px]">
-                                                                <span className="text-[10px] text-muted-foreground shrink-0">Filename:</span>
-                                                                <select
-                                                                    value={filenameMode}
-                                                                    onChange={(e) => {
-                                                                        const mode = e.target.value;
-                                                                        if (mode === "original") updateQuickAction(i, "filename", "");
-                                                                        else if (mode === "auto") updateQuickAction(i, "filename", "auto");
-                                                                        else updateQuickAction(i, "filename", "{date}_{issuer}_{document_type}");
-                                                                    }}
-                                                                    className="h-7 text-xs rounded-lg border border-border/40 bg-background px-2 text-foreground shrink-0"
-                                                                >
-                                                                    <option value="original">Keep original</option>
-                                                                    <option value="auto">Smart rename (AI)</option>
-                                                                    <option value="custom">Custom pattern</option>
-                                                                </select>
-                                                                {filenameMode === "custom" && (
+                                                            <div className="flex gap-2 items-center min-w-0">
+                                                                {action.type !== "append_to_google_sheet" && (
                                                                     <Input
-                                                                        value={action.filename}
-                                                                        onChange={(e) => updateQuickAction(i, "filename", e.target.value)}
-                                                                        placeholder="{date}_{issuer}_{document_type}"
-                                                                        className="h-7 text-xs rounded-lg border-border/40 bg-background font-mono flex-1"
+                                                                        placeholder={action.type === "copy" ? "/Car/" : action.type === "copy_to_gdrive" ? "Folder ID (empty = My Drive root)" : action.type === "rename" ? "Tesla-{date}" : "/logs/invoices.csv"}
+                                                                        value={action.destination}
+                                                                        onChange={(e) => updateQuickAction(i, "destination", e.target.value)}
+                                                                        className="h-8 text-xs rounded-xl border-border/40 bg-background font-mono flex-1 min-w-0"
                                                                     />
                                                                 )}
+                                                                {quickForm.actions.length > 1 && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => removeQuickAction(i)}
+                                                                        className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-1"
+                                                                    >
+                                                                        <X className="w-3.5 h-3.5" />
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        {(action.type === "copy" || action.type === "copy_to_gdrive") && (
+                                                            <div className="grid grid-cols-[9rem_minmax(0,1fr)] gap-2 items-center">
+                                                                <div aria-hidden="true" />
+                                                                <div className="flex gap-2 items-center min-w-0">
+                                                                    <span className="text-[10px] text-muted-foreground shrink-0">Filename:</span>
+                                                                    <select
+                                                                        value={filenameMode}
+                                                                        onChange={(e) => {
+                                                                            const mode = e.target.value;
+                                                                            if (mode === "original") updateQuickAction(i, "filename", "");
+                                                                            else if (mode === "auto") updateQuickAction(i, "filename", "auto");
+                                                                            else updateQuickAction(i, "filename", "{date}_{issuer}_{document_type}");
+                                                                        }}
+                                                                        className="h-7 text-xs rounded-lg border border-border/40 bg-background px-2 text-foreground shrink-0"
+                                                                    >
+                                                                        <option value="original">Keep original</option>
+                                                                        <option value="auto">Smart rename (AI)</option>
+                                                                        <option value="custom">Custom pattern</option>
+                                                                    </select>
+                                                                    {filenameMode === "custom" && (
+                                                                        <Input
+                                                                            value={action.filename}
+                                                                            onChange={(e) => updateQuickAction(i, "filename", e.target.value)}
+                                                                            placeholder="{date}_{issuer}_{document_type}"
+                                                                            className="h-7 text-xs rounded-lg border-border/40 bg-background font-mono flex-1 min-w-0"
+                                                                        />
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                        {action.type === "append_to_google_sheet" && (
+                                                            <div className="grid grid-cols-[9rem_minmax(0,1fr)] gap-2">
+                                                                <div aria-hidden="true" />
+                                                                <div className="flex flex-col gap-2">
+                                                                    <div className="flex gap-2">
+                                                                        <Input
+                                                                            placeholder="Spreadsheet ID or Google Sheet URL"
+                                                                            value={action.spreadsheet_id || ""}
+                                                                            onChange={(e) => updateQuickAction(i, "spreadsheet_id", e.target.value)}
+                                                                            className="h-7 text-xs rounded-lg flex-1"
+                                                                        />
+                                                                        <Input
+                                                                            placeholder="Optional tab/range (e.g. Sheet1!A:F)"
+                                                                            value={action.range || ""}
+                                                                            onChange={(e) => updateQuickAction(i, "range", e.target.value)}
+                                                                            className="h-7 text-xs rounded-lg w-32"
+                                                                        />
+                                                                    </div>
+                                                                    <div className="flex flex-col gap-1.5 p-2 rounded-lg border border-border/40 bg-muted/20">
+                                                                        <div className="flex items-center justify-between">
+                                                                            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Columns Mapping (A, B, C...)</Label>
+                                                                            <Button
+                                                                                type="button"
+                                                                                variant="ghost"
+                                                                                size="sm"
+                                                                                className="h-6 text-[10px] px-2 py-0"
+                                                                                onClick={() => {
+                                                                                    const cols = [...(action.columns || []), ""];
+                                                                                    updateQuickAction(i, "columns", cols);
+                                                                                }}
+                                                                            >
+                                                                                <Plus className="w-3 h-3 mr-1" /> Add Col
+                                                                            </Button>
+                                                                        </div>
+                                                                        {(action.columns || []).map((col: string, colIdx: number) => (
+                                                                            <div key={colIdx} className="flex items-center gap-1.5">
+                                                                                <span className="text-[10px] font-mono text-muted-foreground w-4 flex-shrink-0 text-center">
+                                                                                    {String.fromCharCode(65 + colIdx)}
+                                                                                </span>
+                                                                                <Input
+                                                                                    placeholder="e.g. {Date} or Static Text"
+                                                                                    value={col}
+                                                                                    onChange={(e) => {
+                                                                                        const newCols = [...(action.columns || [])];
+                                                                                        newCols[colIdx] = e.target.value;
+                                                                                        updateQuickAction(i, "columns", newCols);
+                                                                                    }}
+                                                                                    className="h-7 text-xs rounded-lg font-mono flex-1"
+                                                                                />
+                                                                                <button
+                                                                                    type="button"
+                                                                                    onClick={() => {
+                                                                                        const newCols = (action.columns || []).filter((_, idx) => idx !== colIdx);
+                                                                                        updateQuickAction(i, "columns", newCols);
+                                                                                    }}
+                                                                                    className="text-muted-foreground hover:text-destructive p-1"
+                                                                                >
+                                                                                    <X className="w-3 h-3" />
+                                                                                </button>
+                                                                            </div>
+                                                                        ))}
+                                                                        {(!action.columns || action.columns.length === 0) && (
+                                                                            <div className="text-[10px] text-muted-foreground italic text-center py-1">
+                                                                                No explicit mapping provided. Folio will auto-map by reading header row from the sheet template.
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
                                                             </div>
                                                         )}
                                                     </div>
@@ -690,11 +942,17 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                     </div>
                                 </div>
 
+                                {hasInvalidAppendAction && (
+                                    <p className="text-[10px] text-destructive">
+                                        "Append to Google Sheet" actions require a Spreadsheet ID or Google Sheet URL.
+                                    </p>
+                                )}
+
                                 <div className="flex gap-2 pt-1">
                                     <Button
                                         size="sm"
                                         onClick={handleQuickCreate}
-                                        disabled={isQuickSaving || !quickForm.name.trim()}
+                                        disabled={isQuickSaving || !quickForm.name.trim() || hasInvalidAppendAction}
                                         className="flex-1 h-8 rounded-xl font-black text-[10px] uppercase tracking-widest gap-1.5"
                                     >
                                         {isQuickSaving ? (
@@ -874,7 +1132,7 @@ export function PoliciesPage({ initialCompose, onInitialConsumed }: PoliciesPage
                                                             <div key={i} className="text-muted-foreground">
                                                                 <span className="font-mono bg-muted px-1 rounded text-[10px]">{a.type}</span>
                                                                 {" "}
-                                                                {a.destination ?? a.pattern ?? ""}
+                                                                {formatActionSummary(a)}
                                                             </div>
                                                         )) ?? <span className="text-muted-foreground/60">—</span>}
                                                     </div>

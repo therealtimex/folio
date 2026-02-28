@@ -9,6 +9,7 @@ import { RenameAction } from "./actions/RenameAction.js";
 import { AutoRenameAction } from "./actions/AutoRenameAction.js";
 import { CopyAction } from "./actions/CopyAction.js";
 import { CopyToGDriveAction } from "./actions/CopyToGDriveAction.js";
+import { AppendToGSheetAction } from "./actions/AppendToGSheetAction.js";
 import { LogCsvAction } from "./actions/LogCsvAction.js";
 import { NotifyAction } from "./actions/NotifyAction.js";
 import { WebhookAction } from "./actions/WebhookAction.js";
@@ -30,6 +31,7 @@ export class Actuator {
         ["auto_rename", new AutoRenameAction()],
         ["copy", new CopyAction()],
         ["copy_to_gdrive", new CopyToGDriveAction()],
+        ["append_to_google_sheet", new AppendToGSheetAction()],
         ["log_csv", new LogCsvAction()],
         ["notify", new NotifyAction()],
         ["webhook", new WebhookAction()],
@@ -146,7 +148,14 @@ export class Actuator {
                     logger.error(msg);
                     result.errors.push(msg);
                     result.success = false;
-                    Actuator.logEvent(ingestionId, userId, "error", "Action Execution", { action: action.type, error: handlerResult.error }, supabase);
+                    const eventDetails: Record<string, unknown> = {
+                        action: action.type,
+                        error: handlerResult.error,
+                    };
+                    if (handlerResult.errorDetails && Object.keys(handlerResult.errorDetails).length > 0) {
+                        Object.assign(eventDetails, handlerResult.errorDetails);
+                    }
+                    Actuator.logEvent(ingestionId, userId, "error", "Action Execution", eventDetails, supabase);
                 }
             } catch (err: unknown) {
                 const errMsg = err instanceof Error ? err.message : String(err);
