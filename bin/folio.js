@@ -53,6 +53,7 @@ const child = spawn(execPath, execArgs, {
   stdio: "inherit",
   env: {
     ...process.env,
+    NODE_ENV: process.env.FOLIO_ENV || "production",
     PORT: port,
     ELECTRON_STATIC_PATH: distPath
   }
