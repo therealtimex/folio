@@ -10,7 +10,7 @@ import { useLanguage } from '../../context/LanguageContext';
 type VisionState = "unknown" | "supported" | "unsupported";
 
 type VisionCapabilityEntry = {
-    state: "supported" | "unsupported";
+    state: "supported" | "unsupported" | "pending_unsupported";
     learned_at?: string;
     expires_at?: string;
     reason?: string;
@@ -22,6 +22,7 @@ function parseVisionCapabilityRows(localSettings: any, defaultProvider: string) 
         key: string;
         provider: string;
         model: string;
+        modality: "image" | "pdf";
         state: VisionState;
         learnedAt?: string;
         expiresAt?: string;
@@ -31,37 +32,55 @@ function parseVisionCapabilityRows(localSettings: any, defaultProvider: string) 
 
     const currentProvider = (localSettings.llm_provider || defaultProvider || "").trim();
     const currentModel = (localSettings.llm_model || "").trim();
-    const currentKey = currentProvider && currentModel ? `${currentProvider}:${currentModel}` : "";
+    const currentImageKey = currentProvider && currentModel ? `${currentProvider}:${currentModel}` : "";
+    const currentPdfKey = currentProvider && currentModel ? `${currentProvider}:${currentModel}:pdf` : "";
 
     const rawMap = localSettings.vision_model_capabilities;
     if (rawMap && typeof rawMap === "object" && !Array.isArray(rawMap)) {
         for (const [key, rawValue] of Object.entries(rawMap as Record<string, unknown>)) {
             if (!rawValue || typeof rawValue !== "object" || Array.isArray(rawValue)) continue;
             const value = rawValue as VisionCapabilityEntry;
-            const state = value.state;
-            if (state !== "supported" && state !== "unsupported") continue;
+            const rawState = value.state;
+            if (rawState !== "supported" && rawState !== "unsupported" && rawState !== "pending_unsupported") continue;
 
-            const separator = key.indexOf(":");
-            const provider = separator >= 0 ? key.slice(0, separator) : "unknown";
-            const model = separator >= 0 ? key.slice(separator + 1) : key;
+            const parts = key.split(":");
+            const provider = parts[0] || "unknown";
+            const hasPdfSuffix = parts.length >= 3 && parts[parts.length - 1] === "pdf";
+            const modality: "image" | "pdf" = hasPdfSuffix ? "pdf" : "image";
+            const modelParts = hasPdfSuffix ? parts.slice(1, -1) : parts.slice(1);
+            const model = modelParts.length > 0 ? modelParts.join(":") : key;
+            const state: VisionState = rawState === "pending_unsupported" ? "unknown" : rawState;
             rows.push({
                 key,
                 provider,
                 model,
+                modality,
                 state,
                 learnedAt: value.learned_at,
                 expiresAt: value.expires_at,
                 reason: value.reason,
-                isCurrent: key === currentKey,
+                isCurrent: key === currentImageKey || key === currentPdfKey,
             });
         }
     }
 
-    if (currentKey && !rows.some((r) => r.key === currentKey)) {
+    if (currentImageKey && !rows.some((r) => r.key === currentImageKey)) {
         rows.unshift({
-            key: currentKey,
+            key: currentImageKey,
             provider: currentProvider,
             model: currentModel,
+            modality: "image",
+            state: "unknown",
+            isCurrent: true,
+        });
+    }
+
+    if (currentPdfKey && !rows.some((r) => r.key === currentPdfKey)) {
+        rows.unshift({
+            key: currentPdfKey,
+            provider: currentProvider,
+            model: currentModel,
+            modality: "pdf",
             state: "unknown",
             isCurrent: true,
         });
@@ -106,8 +125,7 @@ export function IntelligenceTab({
     const { t } = useLanguage();
     const capabilityRows = parseVisionCapabilityRows(localSettings, DEFAULT_PROVIDER);
 
-    const setCapabilityState = (provider: string, model: string, state: VisionState) => {
-        const key = `${provider}:${model}`;
+    const setCapabilityState = (key: string, state: VisionState) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         setLocalSettings((s: any) => {
             const currentMap = s?.vision_model_capabilities && typeof s.vision_model_capabilities === "object" && !Array.isArray(s.vision_model_capabilities)
@@ -245,6 +263,7 @@ export function IntelligenceTab({
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <p className="font-medium break-all">{row.provider} / {row.model}</p>
+                                                <Badge variant="outline">{row.modality}</Badge>
                                                 {row.isCurrent ? <Badge variant="outline">Current</Badge> : null}
                                                 <Badge variant={stateToBadgeVariant(row.state)}>
                                                     {row.state}
@@ -261,7 +280,7 @@ export function IntelligenceTab({
                                                 id={`vision-state-${toDomId(row.key)}`}
                                                 className="w-full h-10 border rounded-md px-3 bg-background"
                                                 value={row.state}
-                                                onChange={(e) => setCapabilityState(row.provider, row.model, e.target.value as VisionState)}
+                                                onChange={(e) => setCapabilityState(row.key, e.target.value as VisionState)}
                                             >
                                                 <option value="unknown">Unknown (auto-probe)</option>
                                                 <option value="supported">Supported</option>

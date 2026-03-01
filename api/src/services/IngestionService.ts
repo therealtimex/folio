@@ -11,7 +11,7 @@ import { Actuator } from "../utils/Actuator.js";
 import { extractLlmResponse, previewLlmText } from "../utils/llmResponse.js";
 import { RAGService } from "./RAGService.js";
 import { SDKService } from "./SDKService.js";
-import { ModelCapabilityService } from "./ModelCapabilityService.js";
+import { ModelCapabilityService, type VisionCapabilityModality } from "./ModelCapabilityService.js";
 
 const logger = createLogger("IngestionService");
 
@@ -89,6 +89,9 @@ export interface Ingestion {
 }
 
 export class IngestionService {
+    private static readonly FAST_EXTS = ["txt", "md", "csv", "json"] as const;
+    private static readonly IMAGE_EXTS = ["png", "jpg", "jpeg", "webp"] as const;
+
     private static readonly NON_IDEMPOTENT_ACTION_TYPES = new Set([
         "append_to_google_sheet",
         "webhook",
@@ -129,11 +132,12 @@ export class IngestionService {
         policyName?: string;
         extracted: Record<string, unknown>;
         tags: string[];
+        modality: VisionCapabilityModality;
     }): string {
-        const { filename, finalStatus, policyName, extracted, tags } = opts;
+        const { filename, finalStatus, policyName, extracted, tags, modality } = opts;
         const lines: string[] = [
             `Document filename: ${filename}`,
-            "Document source: VLM image extraction",
+            `Document source: VLM ${modality} extraction`,
             `Processing status: ${finalStatus}`,
         ];
 
@@ -186,6 +190,7 @@ export class IngestionService {
         policyName?: string;
         extracted: Record<string, unknown>;
         tags: string[];
+        modality: VisionCapabilityModality;
         supabase: SupabaseClient;
         embedSettings: { embedding_provider?: string; embedding_model?: string };
     }): { synthetic_chars: number; extracted_fields: number; tags_count: number } {
@@ -195,6 +200,7 @@ export class IngestionService {
             policyName: opts.policyName,
             extracted: opts.extracted,
             tags: opts.tags,
+            modality: opts.modality,
         });
         const details = {
             synthetic_chars: syntheticText.length,
@@ -229,6 +235,17 @@ export class IngestionService {
         });
 
         return details;
+    }
+
+    private static buildVlmPayloadMarker(modality: VisionCapabilityModality, dataUrl: string): string {
+        const prefix = modality === "pdf" ? "VLM_PDF_DATA" : "VLM_IMAGE_DATA";
+        return `[${prefix}:${dataUrl}]`;
+    }
+
+    private static async fileToDataUrl(filePath: string, mimeType: string): Promise<string> {
+        const buffer = await fs.readFile(filePath);
+        const base64 = buffer.toString("base64");
+        return `data:${mimeType};base64,${base64}`;
     }
 
     /**
@@ -303,11 +320,10 @@ export class IngestionService {
 
         // 2. Document Triage
         let isFastPath = false;
-        let isVlmFastPath = false;
+        let isMultimodalFastPath = false;
+        let multimodalModality: VisionCapabilityModality | null = null;
         let extractionContent = content;
         const ext = filename.toLowerCase().split('.').pop() || '';
-        const fastExts = ['txt', 'md', 'csv', 'json'];
-        const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
 
         // Pre-fetch settings to decide whether we should attempt VLM.
         const { data: triageSettingsRow } = await supabase
@@ -315,27 +331,27 @@ export class IngestionService {
             .select("llm_provider, llm_model, embedding_provider, embedding_model, vision_model_capabilities")
             .eq("user_id", userId)
             .maybeSingle();
-        const visionResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow);
-        const llmModel = visionResolution.model;
-        const llmProvider = visionResolution.provider;
+        const imageResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow, "image");
+        const pdfResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow, "pdf");
+        const llmModel = imageResolution.model;
+        const llmProvider = imageResolution.provider;
 
-        if (fastExts.includes(ext)) {
+        if (this.FAST_EXTS.includes(ext as typeof this.FAST_EXTS[number])) {
             isFastPath = true;
-        } else if (imageExts.includes(ext) && visionResolution.shouldAttempt) {
+        } else if (this.IMAGE_EXTS.includes(ext as typeof this.IMAGE_EXTS[number]) && imageResolution.shouldAttempt) {
             try {
-                const buffer = await fs.readFile(filePath);
-                const base64 = buffer.toString('base64');
                 const mimeTypeActual = mimeType || `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-                // Special marker for PolicyEngine
-                extractionContent = `[VLM_IMAGE_DATA:data:${mimeTypeActual};base64,${base64}]`;
+                const dataUrl = await this.fileToDataUrl(filePath, mimeTypeActual);
+                extractionContent = this.buildVlmPayloadMarker("image", dataUrl);
                 isFastPath = true;
-                isVlmFastPath = true;
+                isMultimodalFastPath = true;
+                multimodalModality = "image";
                 logger.info(`Smart Triage: Image ${filename} routed to Fast Path using native VLM (${llmModel}).`);
                 Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "VLM Fast Path selected", type: ext, model: llmModel }, supabase);
             } catch (err) {
                 logger.warn(`Failed to read VLM image ${filename}. Routing to Heavy Path.`, { err });
             }
-        } else if (imageExts.includes(ext)) {
+        } else if (this.IMAGE_EXTS.includes(ext as typeof this.IMAGE_EXTS[number])) {
             logger.info(`Smart Triage: Image ${filename} kept on Heavy Path because ${llmProvider}/${llmModel} is marked vision-unsupported.`);
             Actuator.logEvent(ingestion.id, userId, "info", "Triage", {
                 action: "VLM skipped (model marked unsupported)",
@@ -353,9 +369,29 @@ export class IngestionService {
                     extractionContent = pdfData.text;
                     logger.info(`Smart Triage: PDF ${filename} passed text quality check (${pdfData.pages.filter(p => p.text.trim().length > 30).length}/${pdfData.total} pages with text). Routing to Fast Path.`);
                     Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Smart Triage passed", type: "pdf", fast_path: true }, supabase);
+                } else if (pdfResolution.shouldAttempt) {
+                    // Reuse the already-loaded parse buffer; avoid a second readFile in fileToDataUrl.
+                    const dataUrl = `data:application/pdf;base64,${buffer.toString("base64")}`;
+                    extractionContent = this.buildVlmPayloadMarker("pdf", dataUrl);
+                    isFastPath = true;
+                    isMultimodalFastPath = true;
+                    multimodalModality = "pdf";
+                    logger.info(`Smart Triage: PDF ${filename} routed to multimodal Fast Path using native VLM (${llmModel}).`);
+                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", {
+                        action: "VLM Fast Path selected",
+                        type: "pdf",
+                        modality: "pdf",
+                        model: llmModel,
+                    }, supabase);
                 } else {
-                    logger.info(`Smart Triage: PDF ${filename} failed text quality check. Routing to Heavy Path.`);
-                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Smart Triage failed", type: "pdf", fast_path: false }, supabase);
+                    logger.info(`Smart Triage: PDF ${filename} kept on Heavy Path because ${llmProvider}/${llmModel} is marked PDF-unsupported.`);
+                    Actuator.logEvent(ingestion.id, userId, "info", "Triage", {
+                        action: "VLM skipped (model marked unsupported)",
+                        type: "pdf",
+                        modality: "pdf",
+                        model: llmModel,
+                        provider: llmProvider,
+                    }, supabase);
                 }
             } catch (err) {
                 logger.warn(`Failed to parse PDF ${filename}. Routing to Heavy Path.`, { err });
@@ -395,7 +431,7 @@ export class IngestionService {
                     details: {
                         provider: llmSettings.llm_provider ?? llmProvider,
                         model: llmSettings.llm_model ?? llmModel,
-                        mode: isVlmFastPath ? "vision" : "text",
+                        mode: isMultimodalFastPath ? `vision:${multimodalModality ?? "image"}` : "text",
                     }
                 });
 
@@ -458,7 +494,7 @@ export class IngestionService {
                     .select()
                     .single();
 
-                if (isVlmFastPath) {
+                if (isMultimodalFastPath && multimodalModality) {
                     const embeddingMeta = this.queueVlmSemanticEmbedding({
                         ingestionId: ingestion.id,
                         userId,
@@ -467,6 +503,7 @@ export class IngestionService {
                         policyName,
                         extracted: mergedExtracted,
                         tags: autoTags,
+                        modality: multimodalModality,
                         supabase,
                         embedSettings,
                     });
@@ -484,12 +521,13 @@ export class IngestionService {
                         .eq("id", ingestion.id);
                 }
 
-                if (isVlmFastPath) {
+                if (isMultimodalFastPath && multimodalModality) {
                     await ModelCapabilityService.learnVisionSuccess({
                         supabase,
                         userId,
                         provider: llmSettings.llm_provider ?? llmProvider,
                         model: llmSettings.llm_model ?? llmModel,
+                        modality: multimodalModality,
                     });
                 }
 
@@ -498,13 +536,14 @@ export class IngestionService {
             } catch (err) {
                 const msg = err instanceof Error ? err.message : String(err);
 
-                if (isVlmFastPath) {
+                if (isMultimodalFastPath && multimodalModality) {
                     const learnedState = await ModelCapabilityService.learnVisionFailure({
                         supabase,
                         userId,
                         provider: llmProvider,
                         model: llmModel,
                         error: err,
+                        modality: multimodalModality,
                     });
                     logger.warn(`VLM extraction failed for ${filename}. Falling back to Heavy Path. Error: ${msg}`);
                     Actuator.logEvent(ingestion.id, userId, "error", "Processing", {
@@ -587,38 +626,38 @@ export class IngestionService {
         if (!filePath) throw new Error("No storage path found for this ingestion");
 
         let isFastPath = false;
-        let isVlmFastPath = false;
+        let isMultimodalFastPath = false;
+        let multimodalModality: VisionCapabilityModality | null = null;
         let extractionContent = "";
         const ext = filename.toLowerCase().split('.').pop() || '';
-        const fastExts = ['txt', 'md', 'csv', 'json'];
-        const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
 
         const { data: triageSettingsRow } = await supabase
             .from("user_settings")
             .select("llm_provider, llm_model, embedding_provider, embedding_model, vision_model_capabilities")
             .eq("user_id", userId)
             .maybeSingle();
-        const visionResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow);
-        const llmModel = visionResolution.model;
-        const llmProvider = visionResolution.provider;
+        const imageResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow, "image");
+        const pdfResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow, "pdf");
+        const llmModel = imageResolution.model;
+        const llmProvider = imageResolution.provider;
 
-        if (fastExts.includes(ext)) {
+        if (this.FAST_EXTS.includes(ext as typeof this.FAST_EXTS[number])) {
             isFastPath = true;
             extractionContent = await fs.readFile(filePath, "utf-8");
-        } else if (imageExts.includes(ext) && visionResolution.shouldAttempt) {
+        } else if (this.IMAGE_EXTS.includes(ext as typeof this.IMAGE_EXTS[number]) && imageResolution.shouldAttempt) {
             try {
-                const buffer = await fs.readFile(filePath);
-                const base64 = buffer.toString('base64');
                 const mimeTypeActual = `image/${ext === 'jpg' ? 'jpeg' : ext}`;
-                extractionContent = `[VLM_IMAGE_DATA:data:${mimeTypeActual};base64,${base64}]`;
+                const dataUrl = await this.fileToDataUrl(filePath, mimeTypeActual);
+                extractionContent = this.buildVlmPayloadMarker("image", dataUrl);
                 isFastPath = true;
-                isVlmFastPath = true;
+                isMultimodalFastPath = true;
+                multimodalModality = "image";
                 logger.info(`Smart Triage: Re-run image ${filename} routed to Fast Path using native VLM (${llmModel}).`);
                 Actuator.logEvent(ingestionId, userId, "info", "Triage", { action: "VLM Fast Path selected", type: ext, model: llmModel }, supabase);
             } catch (err) {
                 logger.warn(`Failed to read VLM image ${filename} during rerun. Routing to Heavy Path.`, { err });
             }
-        } else if (imageExts.includes(ext)) {
+        } else if (this.IMAGE_EXTS.includes(ext as typeof this.IMAGE_EXTS[number])) {
             logger.info(`Smart Triage: Re-run image ${filename} kept on Heavy Path because ${llmProvider}/${llmModel} is marked vision-unsupported.`);
             Actuator.logEvent(ingestionId, userId, "info", "Triage", {
                 action: "VLM skipped (model marked unsupported)",
@@ -634,10 +673,32 @@ export class IngestionService {
                 if (isPdfTextExtractable(pdfData)) {
                     isFastPath = true;
                     extractionContent = pdfData.text;
+                } else if (pdfResolution.shouldAttempt) {
+                    // Reuse the already-loaded parse buffer; avoid a second readFile in fileToDataUrl.
+                    const dataUrl = `data:application/pdf;base64,${buffer.toString("base64")}`;
+                    extractionContent = this.buildVlmPayloadMarker("pdf", dataUrl);
+                    isFastPath = true;
+                    isMultimodalFastPath = true;
+                    multimodalModality = "pdf";
+                    logger.info(`Smart Triage: Re-run PDF ${filename} routed to multimodal Fast Path using native VLM (${llmModel}).`);
+                    Actuator.logEvent(ingestionId, userId, "info", "Triage", {
+                        action: "VLM Fast Path selected",
+                        type: "pdf",
+                        modality: "pdf",
+                        model: llmModel,
+                    }, supabase);
+                } else {
+                    logger.info(`Smart Triage: Re-run PDF ${filename} kept on Heavy Path because ${llmProvider}/${llmModel} is marked PDF-unsupported.`);
+                    Actuator.logEvent(ingestionId, userId, "info", "Triage", {
+                        action: "VLM skipped (model marked unsupported)",
+                        type: "pdf",
+                        modality: "pdf",
+                        model: llmModel,
+                        provider: llmProvider
+                    }, supabase);
                 }
-                // eslint-disable-next-line @typescript-eslint/no-unused-vars
             } catch (err) {
-                // ignore
+                logger.warn(`Failed to parse PDF ${filename} during rerun. Routing to Heavy Path.`, { err });
             }
         }
 
@@ -667,12 +728,12 @@ export class IngestionService {
             baselineTrace.push({
                 timestamp: new Date().toISOString(),
                 step: "LLM request (baseline extraction)",
-                details: {
-                    provider: llmSettings.llm_provider ?? llmProvider,
-                    model: llmSettings.llm_model ?? llmModel,
-                    mode: isVlmFastPath ? "vision" : "text",
-                }
-            });
+                    details: {
+                        provider: llmSettings.llm_provider ?? llmProvider,
+                        model: llmSettings.llm_model ?? llmModel,
+                        mode: isMultimodalFastPath ? `vision:${multimodalModality ?? "image"}` : "text",
+                    }
+                });
 
             const baselineResult = await PolicyEngine.extractBaseline(
                 doc,
@@ -754,7 +815,7 @@ export class IngestionService {
                     })
                     .eq("id", ingestionId);
 
-                if (isVlmFastPath) {
+                if (isMultimodalFastPath && multimodalModality) {
                     const embeddingMeta = this.queueVlmSemanticEmbedding({
                         ingestionId,
                         userId,
@@ -763,6 +824,7 @@ export class IngestionService {
                         policyName,
                         extracted: mergedExtracted,
                         tags: mergedTags,
+                        modality: multimodalModality,
                         supabase,
                         embedSettings,
                     });
@@ -780,25 +842,27 @@ export class IngestionService {
                         .eq("id", ingestionId);
                 }
 
-                if (isVlmFastPath) {
+                if (isMultimodalFastPath && multimodalModality) {
                     await ModelCapabilityService.learnVisionSuccess({
                         supabase,
                         userId,
                         provider: llmSettings.llm_provider ?? llmProvider,
                         model: llmSettings.llm_model ?? llmModel,
+                        modality: multimodalModality,
                     });
                 }
 
                 return finalStatus === "matched";
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
-                if (isVlmFastPath) {
+                if (isMultimodalFastPath && multimodalModality) {
                     const learnedState = await ModelCapabilityService.learnVisionFailure({
                         supabase,
                         userId,
                         provider: llmProvider,
                         model: llmModel,
                         error: err,
+                        modality: multimodalModality,
                     });
                     logger.warn(`VLM extraction failed during rerun for ${filename}. Falling back to Heavy Path. Error: ${msg}`);
                     Actuator.logEvent(ingestionId, userId, "error", "Processing", {

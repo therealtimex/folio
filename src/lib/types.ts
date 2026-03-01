@@ -40,12 +40,16 @@ export interface UserSettings {
   // Embedding Settings
   embedding_provider?: string | null;
   embedding_model?: string | null;
-  // Learned vision capability map keyed by "provider:model"
+  // Learned multimodal capability map keyed by "provider:model" (image)
+  // or "provider:model:pdf" (PDF file input).
   vision_model_capabilities?: Record<string, {
-    state: "supported" | "unsupported";
+    state: "supported" | "unsupported" | "pending_unsupported";
     learned_at: string;
     expires_at?: string;
     reason?: string;
+    failure_count?: number;
+    last_failure_at?: string;
+    evidence?: string[];
   }>;
   // BYOK
   google_client_id?: string;

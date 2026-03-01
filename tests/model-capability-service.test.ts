@@ -309,4 +309,104 @@ describe("ModelCapabilityService.learnVisionFailure", () => {
     expect(first).toBe("unknown");
     expect(second).toBe("unsupported");
   });
+
+  it("tracks PDF modality separately from image modality", async () => {
+    const supabase = createSupabaseMock();
+    const error = {
+      message: "PDF is not supported for this model",
+      status: 400,
+    };
+
+    const first = await ModelCapabilityService.learnVisionFailure({
+      supabase: supabase.client,
+      userId: "user-9",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      modality: "pdf",
+      error,
+    });
+
+    const second = await ModelCapabilityService.learnVisionFailure({
+      supabase: supabase.client,
+      userId: "user-9",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      modality: "pdf",
+      error,
+    });
+
+    expect(first).toBe("unknown");
+    expect(second).toBe("unsupported");
+
+    const map = supabase.getMap();
+    expect(map["openai:gpt-4.1-mini:pdf"]?.state).toBe("unsupported");
+    expect(map["openai:gpt-4.1-mini"]?.state).toBeUndefined();
+
+    const imageResolution = ModelCapabilityService.resolveVisionSupport({
+      llm_provider: "openai",
+      llm_model: "gpt-4.1-mini",
+      vision_model_capabilities: map,
+    }, "image");
+    const pdfResolution = ModelCapabilityService.resolveVisionSupport({
+      llm_provider: "openai",
+      llm_model: "gpt-4.1-mini",
+      vision_model_capabilities: map,
+    }, "pdf");
+
+    expect(imageResolution.state).toBe("unknown");
+    expect(pdfResolution.state).toBe("unsupported");
+  });
+
+  it("treats PDF parse errors as document-specific (non-capability)", async () => {
+    const supabase = createSupabaseMock();
+
+    const state = await ModelCapabilityService.learnVisionFailure({
+      supabase: supabase.client,
+      userId: "user-10",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      modality: "pdf",
+      error: {
+        message: "Failed to parse PDF: file is corrupted",
+        status: 422,
+      },
+    });
+
+    expect(state).toBe("unknown");
+    expect(supabase.getWriteCount()).toBe(0);
+  });
+
+  it("learns PDF capability from provider-specific signal plus client-validation status", async () => {
+    const supabase = createSupabaseMock();
+    const error = {
+      message: "Error processing PDF: unsupported file input",
+      status: 400,
+    };
+
+    const first = await ModelCapabilityService.learnVisionFailure({
+      supabase: supabase.client,
+      userId: "user-11",
+      provider: "realtimexai",
+      model: "text-model",
+      modality: "pdf",
+      error,
+    });
+
+    const second = await ModelCapabilityService.learnVisionFailure({
+      supabase: supabase.client,
+      userId: "user-11",
+      provider: "realtimexai",
+      model: "text-model",
+      modality: "pdf",
+      error,
+    });
+
+    expect(first).toBe("unknown");
+    expect(second).toBe("unsupported");
+
+    const entry = supabase.getMap()["realtimexai:text-model:pdf"];
+    expect(entry?.state).toBe("unsupported");
+    expect(entry?.evidence).toContain("provider:unsupported file input");
+    expect(entry?.evidence).toContain("status:client_validation");
+  });
 });

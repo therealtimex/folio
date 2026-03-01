@@ -5,6 +5,7 @@ import { SDKService } from "./SDKService.js";
 const logger = createLogger("ModelCapabilityService");
 
 export type VisionCapabilityState = "supported" | "unsupported" | "unknown";
+export type VisionCapabilityModality = "image" | "pdf";
 type StoredVisionCapabilityState = "supported" | "unsupported" | "pending_unsupported";
 
 interface StoredVisionCapability {
@@ -28,6 +29,7 @@ interface SettingsLike {
 export interface VisionResolution {
     provider: string;
     model: string;
+    modality: VisionCapabilityModality;
     state: VisionCapabilityState;
     shouldAttempt: boolean;
 }
@@ -53,21 +55,30 @@ export class ModelCapabilityService {
     private static readonly UNSUPPORTED_CONFIRMATION_FAILURES = 2;
     private static readonly UNSUPPORTED_SCORE_THRESHOLD = 3;
 
-    static resolveVisionSupport(settingsRow: SettingsLike | null | undefined): VisionResolution {
+    static resolveVisionSupport(
+        settingsRow: SettingsLike | null | undefined,
+        modality: VisionCapabilityModality = "image"
+    ): VisionResolution {
         const provider = (settingsRow?.llm_provider || SDKService.DEFAULT_LLM_PROVIDER).trim();
         const model = (settingsRow?.llm_model || SDKService.DEFAULT_LLM_MODEL).trim();
-        const state = this.getVisionState(settingsRow?.vision_model_capabilities, provider, model);
+        const state = this.getVisionState(settingsRow?.vision_model_capabilities, provider, model, modality);
         return {
             provider,
             model,
+            modality,
             state,
             shouldAttempt: state !== "unsupported",
         };
     }
 
-    static getVisionState(rawMap: unknown, provider: string, model: string): VisionCapabilityState {
+    static getVisionState(
+        rawMap: unknown,
+        provider: string,
+        model: string,
+        modality: VisionCapabilityModality = "image"
+    ): VisionCapabilityState {
         const map = this.normalizeCapabilityMap(rawMap);
-        const entry = map[this.capabilityKey(provider, model)];
+        const entry = map[this.capabilityKey(provider, model, modality)];
         if (!entry || this.isExpired(entry)) return "unknown";
         if (entry.state === "pending_unsupported") return "unknown";
         return entry.state;
@@ -78,9 +89,11 @@ export class ModelCapabilityService {
         userId: string;
         provider: string;
         model: string;
+        modality?: VisionCapabilityModality;
     }): Promise<void> {
         await this.writeCapability({
             ...opts,
+            modality: opts.modality ?? "image",
             state: "supported",
             reason: "vision_request_succeeded",
             ttlMs: this.SUPPORTED_TTL_MS,
@@ -93,18 +106,24 @@ export class ModelCapabilityService {
         provider: string;
         model: string;
         error: unknown;
+        modality?: VisionCapabilityModality;
     }): Promise<VisionCapabilityState> {
+        const modality = opts.modality ?? "image";
         const classification = this.classifyVisionFailure({
             error: opts.error,
             provider: opts.provider,
+            modality,
         });
 
         if (!classification.isCapabilityError) {
-            logger.info(`Vision failure for ${opts.provider}/${opts.model} treated as non-capability; leaving capability unknown`, {
+            logger.info(
+                `Vision failure for ${opts.provider}/${opts.model} (${modality}) treated as non-capability; leaving capability unknown`,
+                {
                 reason: classification.reason,
                 score: classification.score,
                 evidence: classification.evidence,
-            });
+                }
+            );
             return "unknown";
         }
 
@@ -113,7 +132,7 @@ export class ModelCapabilityService {
             return "unknown";
         }
 
-        const key = this.capabilityKey(opts.provider, opts.model);
+        const key = this.capabilityKey(opts.provider, opts.model, modality);
         const now = new Date();
         const failureCount = this.nextFailureCount(map[key], now.getTime());
 
@@ -123,6 +142,7 @@ export class ModelCapabilityService {
                 userId: opts.userId,
                 provider: opts.provider,
                 model: opts.model,
+                modality,
                 state: "pending_unsupported",
                 reason: "capability_signal_pending_confirmation",
                 ttlMs: this.PENDING_UNSUPPORTED_TTL_MS,
@@ -139,6 +159,7 @@ export class ModelCapabilityService {
             userId: opts.userId,
             provider: opts.provider,
             model: opts.model,
+            modality,
             state: "unsupported",
             reason: classification.reason,
             ttlMs: this.UNSUPPORTED_TTL_MS,
@@ -190,6 +211,7 @@ export class ModelCapabilityService {
         userId: string;
         provider: string;
         model: string;
+        modality: VisionCapabilityModality;
         state: StoredVisionCapabilityState;
         reason: string;
         ttlMs: number;
@@ -203,6 +225,7 @@ export class ModelCapabilityService {
             userId,
             provider,
             model,
+            modality,
             state,
             reason,
             ttlMs,
@@ -218,7 +241,7 @@ export class ModelCapabilityService {
         }
 
         const now = new Date();
-        const key = this.capabilityKey(provider, model);
+        const key = this.capabilityKey(provider, model, modality);
 
         const nextEntry: StoredVisionCapability = {
             state,
@@ -246,7 +269,7 @@ export class ModelCapabilityService {
             return;
         }
 
-        logger.info(`Updated model capability for ${provider}/${model}: ${state}`, {
+        logger.info(`Updated model capability for ${provider}/${model} (${modality}): ${state}`, {
             reason,
             ttlMs,
             failureCount,
@@ -308,8 +331,14 @@ export class ModelCapabilityService {
         return normalized;
     }
 
-    private static capabilityKey(provider: string, model: string): string {
+    private static capabilityBaseKey(provider: string, model: string): string {
         return `${provider.toLowerCase().trim()}:${model.toLowerCase().trim()}`;
+    }
+
+    private static capabilityKey(provider: string, model: string, modality: VisionCapabilityModality = "image"): string {
+        const base = this.capabilityBaseKey(provider, model);
+        if (modality === "image") return base;
+        return `${base}:${modality}`;
     }
 
     private static isExpired(entry: StoredVisionCapability): boolean {
@@ -339,7 +368,11 @@ export class ModelCapabilityService {
         return currentCount + 1;
     }
 
-    private static classifyVisionFailure(opts: { error: unknown; provider: string }): VisionFailureClassification {
+    private static classifyVisionFailure(opts: {
+        error: unknown;
+        provider: string;
+        modality: VisionCapabilityModality;
+    }): VisionFailureClassification {
         const signal = this.extractVisionFailureSignal(opts.error);
         if (!signal.message && signal.codes.size === 0 && signal.statusCodes.size === 0) {
             return { isCapabilityError: false, reason: "empty_error", score: 0, evidence: [] };
@@ -355,7 +388,7 @@ export class ModelCapabilityService {
             };
         }
 
-        const documentEvidence = this.matchDocumentSpecific(signal);
+        const documentEvidence = this.matchDocumentSpecific(signal, opts.modality);
         if (documentEvidence.length > 0) {
             return {
                 isCapabilityError: false,
@@ -365,7 +398,7 @@ export class ModelCapabilityService {
             };
         }
 
-        const capability = this.scoreCapabilitySignal(signal, opts.provider);
+        const capability = this.scoreCapabilitySignal(signal, opts.provider, opts.modality);
         if (capability.score >= this.UNSUPPORTED_SCORE_THRESHOLD) {
             return {
                 isCapabilityError: true,
@@ -516,8 +549,8 @@ export class ModelCapabilityService {
         ];
     }
 
-    private static matchDocumentSpecific(signal: VisionFailureSignal): string[] {
-        const codeMatches = this.matchCodes(signal.codes, [
+    private static matchDocumentSpecific(signal: VisionFailureSignal, modality: VisionCapabilityModality): string[] {
+        const imageCodeHints = [
             "image_too_large",
             "invalid_base64",
             "invalid_image",
@@ -525,9 +558,8 @@ export class ModelCapabilityService {
             "malformed_image",
             "invalid_image_url",
             "image_decode_failed",
-        ]);
-
-        const messageMatches = this.matchMessage(signal.message, [
+        ];
+        const imageMessageHints = [
             "image too large",
             "invalid base64",
             "malformed image",
@@ -535,7 +567,37 @@ export class ModelCapabilityService {
             "unable to decode image",
             "failed to decode image",
             "invalid image url",
-        ]);
+        ];
+        const pdfCodeHints = [
+            "invalid_pdf",
+            "malformed_pdf",
+            "corrupt_pdf",
+            "encrypted_pdf",
+            "password_protected_pdf",
+            "pdf_parse_error",
+            "file_too_large",
+        ];
+        const pdfMessageHints = [
+            "invalid pdf",
+            "malformed pdf",
+            "corrupt pdf",
+            "encrypted pdf",
+            "password protected pdf",
+            "failed to parse pdf",
+            "unable to parse pdf",
+            "pdf is corrupted",
+            "pdf too large",
+            "file too large",
+        ];
+
+        const codeMatches = this.matchCodes(
+            signal.codes,
+            modality === "pdf" ? pdfCodeHints : imageCodeHints
+        );
+        const messageMatches = this.matchMessage(
+            signal.message,
+            modality === "pdf" ? pdfMessageHints : imageMessageHints
+        );
 
         const statusMatches = Array.from(signal.statusCodes).filter((status) => {
             if (status === 413) return true;
@@ -552,60 +614,109 @@ export class ModelCapabilityService {
         ];
     }
 
-    private static scoreCapabilitySignal(signal: VisionFailureSignal, provider: string): { score: number; evidence: string[] } {
+    private static scoreCapabilitySignal(
+        signal: VisionFailureSignal,
+        provider: string,
+        modality: VisionCapabilityModality
+    ): { score: number; evidence: string[] } {
         const evidence: string[] = [];
         let score = 0;
 
-        const explicitCapabilityCodes = this.matchCodes(signal.codes, [
-            "vision_not_supported",
-            "unsupported_vision",
-            "model_not_vision_capable",
-            "image_not_supported",
-            "unsupported_message_content",
-            "unsupported_content_type_for_model",
-            "unsupported_image_input",
-            "invalid_model_for_vision",
-        ]);
+        const explicitCapabilityCodes = this.matchCodes(
+            signal.codes,
+            modality === "pdf"
+                ? [
+                    "pdf_not_supported",
+                    "unsupported_pdf_input",
+                    "unsupported_document_input",
+                    "unsupported_file_input",
+                    "input_file_not_supported",
+                    "unsupported_file_type",
+                    "model_not_document_capable",
+                ]
+                : [
+                    "vision_not_supported",
+                    "unsupported_vision",
+                    "model_not_vision_capable",
+                    "image_not_supported",
+                    "unsupported_message_content",
+                    "unsupported_content_type_for_model",
+                    "unsupported_image_input",
+                    "invalid_model_for_vision",
+                ]
+        );
 
         if (explicitCapabilityCodes.length > 0) {
             score += 3;
             evidence.push(...explicitCapabilityCodes.map((match) => `code:${match}`));
         }
 
-        const highPrecisionMessageMatches = this.matchMessage(signal.message, [
-            "does not support images",
-            "does not support image inputs",
-            "model does not support image",
-            "this model cannot process images",
-            "text-only model",
-            "images are not supported for this model",
-            "vision is not supported for this model",
-            "vision is not supported",
-            "vision not supported",
-            "image_url is only supported by certain models",
-        ]);
+        const highPrecisionMessageMatches = this.matchMessage(
+            signal.message,
+            modality === "pdf"
+                ? [
+                    "this model does not support pdf",
+                    "model does not support pdf",
+                    "pdf is not supported for this model",
+                    "file input is not supported for this model",
+                    "input_file is not supported",
+                    "unsupported file type: application/pdf",
+                    "application/pdf is not supported for this model",
+                ]
+                : [
+                    "does not support images",
+                    "does not support image inputs",
+                    "model does not support image",
+                    "this model cannot process images",
+                    "text-only model",
+                    "images are not supported for this model",
+                    "vision is not supported for this model",
+                    "vision is not supported",
+                    "vision not supported",
+                    "image_url is only supported by certain models",
+                ]
+        );
 
         if (highPrecisionMessageMatches.length > 0) {
             score += 3;
             evidence.push(...highPrecisionMessageMatches.map((match) => `msg:${match}`));
         }
 
-        const providerSpecificMatches = this.matchMessage(signal.message, this.providerCapabilityHints(provider));
+        const providerSpecificMatches = this.matchMessage(
+            signal.message,
+            this.providerCapabilityHints(provider, modality)
+        );
         if (providerSpecificMatches.length > 0) {
             score += 2;
             evidence.push(...providerSpecificMatches.map((match) => `provider:${match}`));
         }
 
-        const weakCapabilityHints = this.matchMessage(signal.message, [
-            "vision",
-            "unsupported content type",
-            "unsupported message content",
-            "invalid content type",
-            "unrecognized content type",
-            "image_url",
-            "multimodal",
-            "multi-modal",
-        ]);
+        const weakCapabilityHints = this.matchMessage(
+            signal.message,
+            modality === "pdf"
+                ? [
+                    "pdf input",
+                    "pdf support",
+                    "pdf not supported",
+                    "application/pdf",
+                    "input_file",
+                    "file input",
+                    "document input",
+                    "unsupported file type",
+                    "unsupported content type",
+                    "invalid content type",
+                ]
+                : [
+                    "vision",
+                    "unsupported content type",
+                    "unsupported message content",
+                    "invalid content type",
+                    "unrecognized content type",
+                    "image_url",
+                    "multimodal",
+                    "multi-modal",
+                ]
+        );
 
         const hasClientValidationStatus = Array.from(signal.statusCodes).some((status) => [400, 415, 422].includes(status));
         if (weakCapabilityHints.length > 0 && hasClientValidationStatus) {
@@ -624,8 +735,37 @@ export class ModelCapabilityService {
         };
     }
 
-    private static providerCapabilityHints(provider: string): string[] {
+    private static providerCapabilityHints(provider: string, modality: VisionCapabilityModality): string[] {
         const normalized = provider.toLowerCase().trim();
+
+        if (modality === "pdf") {
+            if (normalized.includes("openai")) {
+                return [
+                    "input_file is not supported",
+                    "unsupported file type: application/pdf",
+                    "application/pdf is not supported for this model",
+                ];
+            }
+            if (normalized.includes("anthropic")) {
+                return [
+                    "pdf is not supported for this model",
+                    "file input is not supported for this model",
+                ];
+            }
+            if (normalized.includes("google") || normalized.includes("gemini")) {
+                return [
+                    "unsupported document input",
+                    "pdf input is not supported",
+                ];
+            }
+            if (normalized.includes("realtimex")) {
+                return [
+                    "unsupported file input",
+                    "invalid model",
+                ];
+            }
+            return [];
+        }
 
         if (normalized.includes("openai")) {
             return [
