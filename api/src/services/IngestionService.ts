@@ -299,7 +299,7 @@ export class IngestionService {
         if (insertErr || !ingestion) throw new Error(`Failed to create ingestion record: ${insertErr?.message}`);
 
         logger.info(`Processing ingestion ${ingestion.id}: ${filename}`);
-        Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Ingestion started", source, filename, fileSize }, supabase);
+        Actuator.logEvent(ingestion.id, userId, "info", "Triage", { action: "Ingestion started", source, filename, fileSize, is_high_intent: true }, supabase);
 
         // 2. Document Triage
         let isFastPath = false;
@@ -580,7 +580,7 @@ export class IngestionService {
             .update({ status: "processing", error_message: null, policy_id: null, policy_name: null, extracted: {}, actions_taken: [], summary: null })
             .eq("id", ingestionId);
 
-        Actuator.logEvent(ingestionId, userId, "info", "Triage", { action: "Re-run Initiated" }, supabase);
+        Actuator.logEvent(ingestionId, userId, "info", "Triage", { action: "Re-run Initiated", is_high_intent: true }, supabase);
 
         const filename = ingestion.filename;
         const filePath = ingestion.storage_path;
@@ -635,7 +635,7 @@ export class IngestionService {
                     isFastPath = true;
                     extractionContent = pdfData.text;
                 }
-            // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
             } catch (err) {
                 // ignore
             }

@@ -199,6 +199,19 @@ export function LiveTerminal() {
                             setExpandedErrors(prev => new Set(prev).add(newEvent.id));
                         }
 
+                        // Context-Aware Auto-Popup Logic
+                        if (!newEvent.details?.is_completion) {
+                            const isHighIntent =
+                                newEvent.event_type === 'error' ||
+                                newEvent.agent_state === 'action' ||
+                                newEvent.agent_state === 'extraction' ||
+                                newEvent.details?.is_high_intent === true;
+
+                            if (isHighIntent) {
+                                openTerminal();
+                            }
+                        }
+
                         setEvents((prev) => {
                             // Insert at the beginning (descending order)
                             const updated = [newEvent, ...prev];
