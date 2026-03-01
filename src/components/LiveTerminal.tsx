@@ -199,10 +199,6 @@ export function LiveTerminal() {
                             setExpandedErrors(prev => new Set(prev).add(newEvent.id));
                         }
 
-                        if (!newEvent.details?.is_completion) {
-                            openTerminal();
-                        }
-
                         setEvents((prev) => {
                             // Insert at the beginning (descending order)
                             const updated = [newEvent, ...prev];
