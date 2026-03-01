@@ -188,23 +188,32 @@ export class ModelCapabilityService {
         const message = this.errorToMessage(error).toLowerCase();
         if (!message) return { isCapabilityError: false, reason: "empty_error" };
 
-        const capabilityHints = [
+        const hardCapabilityHints = [
+            "does not support images",
+            "model does not support image",
+            "invalid model", // e.g. text-only models fed image payloads in realtimexai provider
+        ];
+
+        if (hardCapabilityHints.some((hint) => message.includes(hint))) {
+            return { isCapabilityError: true, reason: "capability_mismatch" };
+        }
+
+        const documentSpecificHints = [
             "image_url",
             "vision",
             "multimodal",
             "multi-modal",
             "unsupported content type",
             "unsupported message content",
-            "does not support images",
-            "model does not support image",
             "invalid content type",
             "invalid image",
             "unrecognized content type",
-            "invalid model", // e.g. text-only models fed image payloads in realtimexai provider
+            "image too large",
+            "base64",
         ];
 
-        if (capabilityHints.some((hint) => message.includes(hint))) {
-            return { isCapabilityError: true, reason: "capability_mismatch" };
+        if (documentSpecificHints.some((hint) => message.includes(hint))) {
+            return { isCapabilityError: false, reason: "document_specific_failure" };
         }
 
         const transientHints = [
