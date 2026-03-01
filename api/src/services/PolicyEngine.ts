@@ -465,7 +465,7 @@ async function evaluateCondition(condition: MatchCondition, doc: DocumentObject,
                         role: "user",
                         content: buildMessageContent(`Question: ${prompt}`, doc.text, true)
                     }
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ] as any,
                 { provider, model }
             );
@@ -592,7 +592,7 @@ ${fieldDescriptions}`;
                 : [
                     { role: "system", content: "You are a precise data extraction engine. Return only valid JSON." },
                     { role: "user", content: buildMessageContent(prompt, doc.text) }
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ] as any,
             { provider, model }
         );
@@ -733,7 +733,7 @@ Rules:
                 : [
                     { role: "system", content: "You are a precise data extraction engine. Return only valid JSON." },
                     { role: "user", content: buildMessageContent(prompt, doc.text) },
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 ] as any,
             { provider, model }
         );
@@ -1136,7 +1136,7 @@ export class PolicyEngine {
                     : [
                         { role: "system", content: systemPrompt },
                         { role: "user", content: buildMessageContent(userPrompt, doc.text) },
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                        // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     ] as any,
                 { provider, model }
             );
@@ -1155,6 +1155,7 @@ export class PolicyEngine {
             if (!parsed) {
                 logger.warn("Baseline extraction returned unparseable JSON", { raw: raw.slice(0, 300) });
                 Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Baseline Extraction", { action: "Baseline extraction unparseable", raw_response: raw.slice(0, 300) }, doc.supabase);
+                if (isVlmPayload) throw new Error("Unparseable JSON from VLM extraction");
                 return { entities: {}, uncertain_fields: [], tags: [] };
             }
 
@@ -1172,6 +1173,7 @@ export class PolicyEngine {
         } catch (err) {
             logger.error("Baseline extraction failed", { err });
             Actuator.logEvent(doc.ingestionId, doc.userId, "error", "Baseline Extraction", { action: "Baseline extraction failed", error: String(err) }, doc.supabase);
+            if (isVlmPayload) throw err;
             return { entities: {}, uncertain_fields: [], tags: [] };
         }
     }

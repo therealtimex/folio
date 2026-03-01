@@ -200,6 +200,7 @@ export class ModelCapabilityService {
             "invalid content type",
             "invalid image",
             "unrecognized content type",
+            "invalid model", // e.g. text-only models fed image payloads in realtimexai provider
         ];
 
         if (capabilityHints.some((hint) => message.includes(hint))) {
