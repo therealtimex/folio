@@ -20,16 +20,14 @@ If you deal with invoices, receipts, reports, or any unstructured documents, Fol
 Folio is designed to be run locally on your machine while securely syncing data to your own designated cloud backend. 
 
 ### Prerequisites
-- Node.js (v20+)
-- A [Supabase](https://supabase.com) account (for your dedicated database)
+- The [RealTimeX Desktop App](https://realtimex.ai) installed on your machine.
+- A [Supabase](https://supabase.com) account (for your dedicated database).
 
 ### Installation
 
-1. **Launch the Setup Wizard:**
-   ```bash
-   npx @realtimex/folio@latest --port 5176
-   ```
-   *(You can change the `--port` to any available port you prefer).*
+1. **Install from Marketplace:**
+   Open the RealTimeX Desktop App, navigate to the **Marketplace**, and install **Folio**.
+   *(Folio runs natively inside the RealTimeX runtime, so no Node.js installation is required).*
 2. **Configure your Database:**
    Follow the Setup Wizard in your browser. You can use **Zero-Config Cloud Provisioning** to automatically set up a secure Supabase project, or manually provide an existing Supabase URL and Key.
 3. **Connect your Integrations:**
