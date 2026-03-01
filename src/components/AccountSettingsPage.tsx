@@ -27,6 +27,7 @@ import { AuthPanel } from "./AuthPanel";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils";
 import { Profile, SupabaseConfig } from "../lib/types";
+import { APP_VERSION } from "../lib/migration-check";
 
 interface AccountSettingsPageProps {
     supabase: SupabaseClient | null;
@@ -137,7 +138,7 @@ export function AccountSettingsPage({
 
                         <div className="px-4">
                             <p className="text-[10px] font-black text-muted-foreground/40 uppercase tracking-widest mb-1">Version</p>
-                            <p className="text-xs font-mono text-muted-foreground/60">v0.48.21</p>
+                            <p className="text-xs font-mono text-muted-foreground/60">v{APP_VERSION || "0.1.0"}</p>
                         </div>
                     </div>
                 </aside>
