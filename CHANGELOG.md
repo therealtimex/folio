@@ -5,6 +5,19 @@ All notable changes to Folio will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.13] - 2026-03-01
+### Added
+- Image re-encode retry on VLM fast path: when a VLM call fails with an `"invalid model"` error, the ingestion service now re-encodes the image to PNG via `sips` and retries once before falling back to the heavy path. Controlled by `FOLIO_VLM_IMAGE_REENCODE_RETRY_ENABLED` (default `true`). Retry metrics (attempted / succeeded / failed / skipped) are emitted to the logger and LiveTerminal.
+
+### Fixed
+- Removed `"invalid model"` from realtimexai provider capability hints for both image and PDF modalities. The realtimexai SDK rejects `image_url` and `input_file` content blocks at the SDK layer for all models, including genuinely multimodal ones, making the error unreliable as a capability signal.
+- Added manual override protection in `writeCapability`: auto-learning (failure or success) now skips writing if the current entry carries `reason: "manual_override"` and the override has not expired. This prevents repeated VLM errors from silently overwriting a user-set capability state.
+- `learnVisionFailure` and `learnVisionSuccess` in `IngestionService` now pass `resolvedProvider`/`resolvedModel` (the effective values from `llmSettings`) instead of the pre-resolution `llmProvider`/`llmModel` variables.
+
+### Tests
+- Added regression for manual support override not overwritten by automatic failure learning.
+- Added regression for manual unsupported override not overwritten by automatic success learning.
+
 ## [0.1.12] - 2026-03-01
 ### Added
 - PDF modality support for multimodal capability learning. The capability system now tracks image and PDF support independently per model, using separate keys (`provider:model` for image, `provider:model:pdf` for PDF).

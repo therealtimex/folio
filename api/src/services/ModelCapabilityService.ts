@@ -242,6 +242,19 @@ export class ModelCapabilityService {
 
         const now = new Date();
         const key = this.capabilityKey(provider, model, modality);
+        const existingEntry = map[key];
+        if (this.isManualOverrideActive(existingEntry) && reason !== "manual_override") {
+            logger.info(
+                `Skipping auto capability update for ${provider}/${model} (${modality}) because manual override is active`,
+                {
+                    requestedState: state,
+                    requestedReason: reason,
+                    currentState: existingEntry?.state,
+                    currentReason: existingEntry?.reason,
+                }
+            );
+            return;
+        }
 
         const nextEntry: StoredVisionCapability = {
             state,
@@ -345,6 +358,12 @@ export class ModelCapabilityService {
         if (!entry.expires_at) return false;
         const expiryTs = Date.parse(entry.expires_at);
         return Number.isFinite(expiryTs) && expiryTs <= Date.now();
+    }
+
+    private static isManualOverrideActive(entry: StoredVisionCapability | undefined): boolean {
+        if (!entry) return false;
+        if (entry.reason !== "manual_override") return false;
+        return !this.isExpired(entry);
     }
 
     private static nextFailureCount(entry: StoredVisionCapability | undefined, nowTs: number): number {
@@ -687,7 +706,7 @@ export class ModelCapabilityService {
             this.providerCapabilityHints(provider, modality)
         );
         if (providerSpecificMatches.length > 0) {
-            score += 2;
+            score += 3;
             evidence.push(...providerSpecificMatches.map((match) => `provider:${match}`));
         }
 
@@ -761,7 +780,6 @@ export class ModelCapabilityService {
             if (normalized.includes("realtimex")) {
                 return [
                     "unsupported file input",
-                    "invalid model",
                 ];
             }
             return [];
@@ -790,7 +808,6 @@ export class ModelCapabilityService {
 
         if (normalized.includes("realtimex")) {
             return [
-                "invalid model",
                 "text-only model",
             ];
         }

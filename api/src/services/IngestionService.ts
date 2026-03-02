@@ -1,6 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import fs from "fs/promises";
+import { execFile } from "child_process";
+import os from "os";
+import path from "path";
 import { PDFParse } from "pdf-parse";
+import { promisify } from "util";
 import { createLogger } from "../utils/logger.js";
 import { PolicyLoader } from "./PolicyLoader.js";
 import type { FolioPolicy } from "./PolicyLoader.js";
@@ -14,6 +18,7 @@ import { SDKService } from "./SDKService.js";
 import { ModelCapabilityService, type VisionCapabilityModality } from "./ModelCapabilityService.js";
 
 const logger = createLogger("IngestionService");
+const execFileAsync = promisify(execFile);
 
 /**
  * Multi-signal classifier that decides whether pdf-parse extracted enough
@@ -91,6 +96,15 @@ export interface Ingestion {
 export class IngestionService {
     private static readonly FAST_EXTS = ["txt", "md", "csv", "json"] as const;
     private static readonly IMAGE_EXTS = ["png", "jpg", "jpeg", "webp"] as const;
+    private static readonly IMAGE_REENCODE_TIMEOUT_MS = 15000;
+    private static readonly IMAGE_REENCODE_RETRY_ENABLED = (process.env.FOLIO_VLM_IMAGE_REENCODE_RETRY_ENABLED ?? "true").toLowerCase() !== "false";
+    private static readonly IMAGE_REENCODE_RETRY_METRICS = {
+        attempted: 0,
+        succeeded: 0,
+        failed: 0,
+        skipped_disabled: 0,
+        skipped_unavailable: 0,
+    };
 
     private static readonly NON_IDEMPOTENT_ACTION_TYPES = new Set([
         "append_to_google_sheet",
@@ -246,6 +260,90 @@ export class IngestionService {
         const buffer = await fs.readFile(filePath);
         const base64 = buffer.toString("base64");
         return `data:${mimeType};base64,${base64}`;
+    }
+
+    private static errorToMessage(error: unknown): string {
+        if (error instanceof Error) return error.message;
+        if (typeof error === "string") return error;
+        if (error && typeof error === "object") {
+            const candidate = error as Record<string, unknown>;
+            if (typeof candidate.message === "string") return candidate.message;
+        }
+        return String(error ?? "");
+    }
+
+    private static isInvalidModelError(error: unknown): boolean {
+        const message = this.errorToMessage(error).toLowerCase();
+        return message.includes("invalid model");
+    }
+
+    private static async reencodeImageToPngDataUrl(filePath: string): Promise<string | null> {
+        const tempOutputPath = path.join(
+            os.tmpdir(),
+            `folio-vlm-reencode-${Date.now()}-${Math.random().toString(16).slice(2)}.png`
+        );
+        try {
+            await execFileAsync("sips", ["-s", "format", "png", filePath, "--out", tempOutputPath], {
+                timeout: this.IMAGE_REENCODE_TIMEOUT_MS,
+                maxBuffer: 1024 * 1024,
+            });
+            const pngBuffer = await fs.readFile(tempOutputPath);
+            return `data:image/png;base64,${pngBuffer.toString("base64")}`;
+        } catch {
+            return null;
+        } finally {
+            await fs.unlink(tempOutputPath).catch(() => undefined);
+        }
+    }
+
+    private static async maybeBuildImageRetryMarker(opts: {
+        error: unknown;
+        filePath: string;
+        filename: string;
+        provider: string;
+        model: string;
+        phase: "ingest" | "rerun";
+    }): Promise<string | null> {
+        if (!this.isInvalidModelError(opts.error)) return null;
+        if (!this.IMAGE_REENCODE_RETRY_ENABLED) {
+            this.bumpImageReencodeRetryMetric("skipped_disabled", opts);
+            logger.info(
+                `VLM ${opts.phase} retry skipped for ${opts.filename}: re-encode retry disabled (${opts.provider}/${opts.model}).`
+            );
+            return null;
+        }
+        const retryDataUrl = await this.reencodeImageToPngDataUrl(opts.filePath);
+        if (!retryDataUrl) {
+            this.bumpImageReencodeRetryMetric("skipped_unavailable", opts);
+            logger.warn(
+                `VLM ${opts.phase} retry skipped for ${opts.filename}: image re-encode unavailable (${opts.provider}/${opts.model}).`
+            );
+            return null;
+        }
+        logger.warn(
+            `VLM ${opts.phase} failed for ${opts.filename} with invalid model. Retrying once with re-encoded image payload (${opts.provider}/${opts.model}).`
+        );
+        return this.buildVlmPayloadMarker("image", retryDataUrl);
+    }
+
+    private static bumpImageReencodeRetryMetric(
+        outcome: keyof typeof IngestionService.IMAGE_REENCODE_RETRY_METRICS,
+        meta: {
+            phase: "ingest" | "rerun";
+            provider: string;
+            model: string;
+            filename: string;
+        }
+    ): void {
+        this.IMAGE_REENCODE_RETRY_METRICS[outcome] += 1;
+        logger.info("VLM image re-encode retry metric", {
+            outcome,
+            phase: meta.phase,
+            provider: meta.provider,
+            model: meta.model,
+            filename: meta.filename,
+            counters: { ...this.IMAGE_REENCODE_RETRY_METRICS },
+        });
     }
 
     /**
@@ -415,134 +513,202 @@ export class IngestionService {
                     embedding_provider: processingSettingsRow.data?.embedding_provider ?? undefined,
                     embedding_model: processingSettingsRow.data?.embedding_model ?? undefined,
                 };
-                const doc = { filePath: filePath, text: extractionContent, ingestionId: ingestion.id, userId, supabase };
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
+                const resolvedProvider = llmSettings.llm_provider ?? llmProvider;
+                const resolvedModel = llmSettings.llm_model ?? llmModel;
 
-                // Fire and forget Semantic Embedding Storage
-                RAGService.chunkAndEmbed(ingestion.id, userId, doc.text, supabase, embedSettings).catch(err => {
-                    logger.error(`RAG embedding failed for ${ingestion.id}`, err);
-                });
+                const runFastPathAttempt = async (
+                    attemptContent: string,
+                    attemptType: "primary" | "reencoded_image_retry"
+                ): Promise<Ingestion> => {
+                    const doc = { filePath: filePath, text: attemptContent, ingestionId: ingestion.id, userId, supabase };
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
 
-                // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
-                baselineTrace.push({
-                    timestamp: new Date().toISOString(),
-                    step: "LLM request (baseline extraction)",
-                    details: {
-                        provider: llmSettings.llm_provider ?? llmProvider,
-                        model: llmSettings.llm_model ?? llmModel,
-                        mode: isMultimodalFastPath ? `vision:${multimodalModality ?? "image"}` : "text",
-                    }
-                });
-
-                const baselineResult = await PolicyEngine.extractBaseline(
-                    doc,
-                    { context: baselineConfig?.context, fields: baselineConfig?.fields },
-                    llmSettings
-                );
-                const baselineEntities = baselineResult.entities;
-                const autoTags = baselineResult.tags;
-                baselineTrace.push({
-                    timestamp: new Date().toISOString(),
-                    step: "LLM response (baseline extraction)",
-                    details: {
-                        entities_count: Object.keys(baselineEntities).length,
-                        uncertain_count: baselineResult.uncertain_fields.length,
-                        tags_count: autoTags.length,
-                    }
-                });
-
-                // Enrich the document with extracted entities so policy keyword/semantic
-                // conditions can match against semantic field values (e.g. document_type:
-                // "invoice") even when those exact words don't appear in the raw text.
-                const entityLines = Object.entries(baselineEntities)
-                    .filter(([, v]) => v != null)
-                    .map(([k, v]) => `${k}: ${Array.isArray(v) ? (v as unknown[]).join(", ") : String(v)}`);
-                const enrichedDoc = entityLines.length > 0
-                    ? { ...doc, text: doc.text + "\n\n[Extracted fields]\n" + entityLines.join("\n") }
-                    : doc;
-
-                // 5. Stage 2: Policy matching + policy-specific field extraction
-                let result;
-                if (userPolicies.length > 0) {
-                    result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings, baselineEntities);
-                } else {
-                    result = await PolicyEngine.process(enrichedDoc, llmSettings, baselineEntities);
-                }
-
-                const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
-                const finalStatus = result.status === "fallback" ? "no_match" : result.status;
-
-                // Merge: baseline entities are the foundation; policy-specific fields
-                // are overlaid on top so more precise extractions take precedence.
-                const mergedExtracted = { ...baselineEntities, ...result.extractedData };
-                let finalTrace = [...baselineTrace, ...(result.trace || [])];
-
-                const { data: updatedIngestion } = await supabase
-                    .from("ingestions")
-                    .update({
-                        status: finalStatus,
-                        policy_id: result.matchedPolicy,
-                        policy_name: policyName,
-                        extracted: mergedExtracted,
-                        actions_taken: result.actionsExecuted,
-                        trace: finalTrace,
-                        tags: autoTags,
-                        baseline_config_id: baselineConfig?.id ?? null,
-                    })
-                    .eq("id", ingestion.id)
-                    .select()
-                    .single();
-
-                if (isMultimodalFastPath && multimodalModality) {
-                    const embeddingMeta = this.queueVlmSemanticEmbedding({
-                        ingestionId: ingestion.id,
-                        userId,
-                        filename,
-                        finalStatus,
-                        policyName,
-                        extracted: mergedExtracted,
-                        tags: autoTags,
-                        modality: multimodalModality,
-                        supabase,
-                        embedSettings,
+                    // Fire and forget Semantic Embedding Storage
+                    RAGService.chunkAndEmbed(ingestion.id, userId, doc.text, supabase, embedSettings).catch(err => {
+                        logger.error(`RAG embedding failed for ${ingestion.id}`, err);
                     });
-                    finalTrace = [
-                        ...finalTrace,
-                        {
-                            timestamp: new Date().toISOString(),
-                            step: "Queued synthetic VLM embedding",
-                            details: embeddingMeta,
+
+                    // 4. Stage 1: Baseline extraction (always runs, LLM call 1 of max 2)
+                    baselineTrace.push({
+                        timestamp: new Date().toISOString(),
+                        step: "LLM request (baseline extraction)",
+                        details: {
+                            provider: resolvedProvider,
+                            model: resolvedModel,
+                            mode: isMultimodalFastPath
+                                ? `vision:${multimodalModality ?? "image"}${attemptType === "reencoded_image_retry" ? ":reencoded" : ""}`
+                                : "text",
                         }
-                    ];
-                    await supabase
-                        .from("ingestions")
-                        .update({ trace: finalTrace })
-                        .eq("id", ingestion.id);
-                }
-
-                if (isMultimodalFastPath && multimodalModality) {
-                    await ModelCapabilityService.learnVisionSuccess({
-                        supabase,
-                        userId,
-                        provider: llmSettings.llm_provider ?? llmProvider,
-                        model: llmSettings.llm_model ?? llmModel,
-                        modality: multimodalModality,
                     });
+
+                    const baselineResult = await PolicyEngine.extractBaseline(
+                        doc,
+                        { context: baselineConfig?.context, fields: baselineConfig?.fields },
+                        llmSettings
+                    );
+                    const baselineEntities = baselineResult.entities;
+                    const autoTags = baselineResult.tags;
+                    baselineTrace.push({
+                        timestamp: new Date().toISOString(),
+                        step: "LLM response (baseline extraction)",
+                        details: {
+                            entities_count: Object.keys(baselineEntities).length,
+                            uncertain_count: baselineResult.uncertain_fields.length,
+                            tags_count: autoTags.length,
+                        }
+                    });
+
+                    // Enrich the document with extracted entities so policy keyword/semantic
+                    // conditions can match against semantic field values (e.g. document_type:
+                    // "invoice") even when those exact words don't appear in the raw text.
+                    const entityLines = Object.entries(baselineEntities)
+                        .filter(([, v]) => v != null)
+                        .map(([k, v]) => `${k}: ${Array.isArray(v) ? (v as unknown[]).join(", ") : String(v)}`);
+                    const enrichedDoc = entityLines.length > 0
+                        ? { ...doc, text: doc.text + "\n\n[Extracted fields]\n" + entityLines.join("\n") }
+                        : doc;
+
+                    // 5. Stage 2: Policy matching + policy-specific field extraction
+                    let result;
+                    if (userPolicies.length > 0) {
+                        result = await PolicyEngine.processWithPolicies(enrichedDoc, userPolicies, llmSettings, baselineEntities);
+                    } else {
+                        result = await PolicyEngine.process(enrichedDoc, llmSettings, baselineEntities);
+                    }
+
+                    const policyName = userPolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name;
+                    const finalStatus = result.status === "fallback" ? "no_match" : result.status;
+
+                    // Merge: baseline entities are the foundation; policy-specific fields
+                    // are overlaid on top so more precise extractions take precedence.
+                    const mergedExtracted = { ...baselineEntities, ...result.extractedData };
+                    let finalTrace = [...baselineTrace, ...(result.trace || [])];
+
+                    const { data: updatedIngestion } = await supabase
+                        .from("ingestions")
+                        .update({
+                            status: finalStatus,
+                            policy_id: result.matchedPolicy,
+                            policy_name: policyName,
+                            extracted: mergedExtracted,
+                            actions_taken: result.actionsExecuted,
+                            trace: finalTrace,
+                            tags: autoTags,
+                            baseline_config_id: baselineConfig?.id ?? null,
+                        })
+                        .eq("id", ingestion.id)
+                        .select()
+                        .single();
+
+                    if (isMultimodalFastPath && multimodalModality) {
+                        const embeddingMeta = this.queueVlmSemanticEmbedding({
+                            ingestionId: ingestion.id,
+                            userId,
+                            filename,
+                            finalStatus,
+                            policyName,
+                            extracted: mergedExtracted,
+                            tags: autoTags,
+                            modality: multimodalModality,
+                            supabase,
+                            embedSettings,
+                        });
+                        finalTrace = [
+                            ...finalTrace,
+                            {
+                                timestamp: new Date().toISOString(),
+                                step: "Queued synthetic VLM embedding",
+                                details: embeddingMeta,
+                            }
+                        ];
+                        await supabase
+                            .from("ingestions")
+                            .update({ trace: finalTrace })
+                            .eq("id", ingestion.id);
+                    }
+
+                    if (isMultimodalFastPath && multimodalModality) {
+                        await ModelCapabilityService.learnVisionSuccess({
+                            supabase,
+                            userId,
+                            provider: resolvedProvider,
+                            model: resolvedModel,
+                            modality: multimodalModality,
+                        });
+                    }
+
+                    return updatedIngestion as Ingestion;
+                };
+
+                let terminalError: unknown = null;
+                try {
+                    return await runFastPathAttempt(extractionContent, "primary");
+                } catch (primaryErr) {
+                    terminalError = primaryErr;
                 }
 
-                return updatedIngestion as Ingestion;
+                if (isMultimodalFastPath && multimodalModality === "image") {
+                    const retryMarker = await this.maybeBuildImageRetryMarker({
+                        error: terminalError,
+                        filePath,
+                        filename,
+                        provider: resolvedProvider,
+                        model: resolvedModel,
+                        phase: "ingest",
+                    });
+                    if (retryMarker) {
+                        this.bumpImageReencodeRetryMetric("attempted", {
+                            phase: "ingest",
+                            provider: resolvedProvider,
+                            model: resolvedModel,
+                            filename,
+                        });
+                        Actuator.logEvent(ingestion.id, userId, "info", "Processing", {
+                            action: "Retrying VLM with re-encoded image payload",
+                            provider: resolvedProvider,
+                            model: resolvedModel,
+                        }, supabase);
+                        try {
+                            const retryResult = await runFastPathAttempt(retryMarker, "reencoded_image_retry");
+                            this.bumpImageReencodeRetryMetric("succeeded", {
+                                phase: "ingest",
+                                provider: resolvedProvider,
+                                model: resolvedModel,
+                                filename,
+                            });
+                            Actuator.logEvent(ingestion.id, userId, "analysis", "Processing", {
+                                action: "VLM re-encoded image retry succeeded",
+                                provider: resolvedProvider,
+                                model: resolvedModel,
+                            }, supabase);
+                            return retryResult;
+                        } catch (retryErr) {
+                            this.bumpImageReencodeRetryMetric("failed", {
+                                phase: "ingest",
+                                provider: resolvedProvider,
+                                model: resolvedModel,
+                                filename,
+                            });
+                            Actuator.logEvent(ingestion.id, userId, "error", "Processing", {
+                                action: "VLM re-encoded image retry failed",
+                                provider: resolvedProvider,
+                                model: resolvedModel,
+                                error: this.errorToMessage(retryErr),
+                            }, supabase);
+                            terminalError = retryErr;
+                        }
+                    }
+                }
 
-            } catch (err) {
-                const msg = err instanceof Error ? err.message : String(err);
-
+                const msg = this.errorToMessage(terminalError);
                 if (isMultimodalFastPath && multimodalModality) {
                     const learnedState = await ModelCapabilityService.learnVisionFailure({
                         supabase,
                         userId,
-                        provider: llmProvider,
-                        model: llmModel,
-                        error: err,
+                        provider: resolvedProvider,
+                        model: resolvedModel,
+                        error: terminalError,
                         modality: multimodalModality,
                     });
                     logger.warn(`VLM extraction failed for ${filename}. Falling back to Heavy Path. Error: ${msg}`);
@@ -563,6 +729,16 @@ export class IngestionService {
                         .single();
                     return updatedIngestion as Ingestion;
                 }
+            } catch (err) {
+                const msg = this.errorToMessage(err);
+                Actuator.logEvent(ingestion.id, userId, "error", "Processing", { error: msg }, supabase);
+                const { data: updatedIngestion } = await supabase
+                    .from("ingestions")
+                    .update({ status: "error", error_message: msg })
+                    .eq("id", ingestion.id)
+                    .select()
+                    .single();
+                return updatedIngestion as Ingestion;
             }
         }
 
@@ -716,53 +892,60 @@ export class IngestionService {
                 embedding_provider: processingSettingsRow.data?.embedding_provider ?? undefined,
                 embedding_model: processingSettingsRow.data?.embedding_model ?? undefined,
             };
-            const doc = { filePath, text: extractionContent, ingestionId, userId, supabase };
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
+            const resolvedProvider = llmSettings.llm_provider ?? llmProvider;
+            const resolvedModel = llmSettings.llm_model ?? llmModel;
 
-            // Fire and forget Semantic Embedding Storage for re-runs
-            RAGService.chunkAndEmbed(ingestionId, userId, doc.text, supabase, embedSettings).catch(err => {
-                logger.error(`RAG embedding failed during rerun for ${ingestionId}`, err);
-            });
+            const runFastPathAttempt = async (
+                attemptContent: string,
+                attemptType: "primary" | "reencoded_image_retry"
+            ): Promise<boolean> => {
+                const doc = { filePath, text: attemptContent, ingestionId, userId, supabase };
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
 
-            baselineTrace.push({
-                timestamp: new Date().toISOString(),
-                step: "LLM request (baseline extraction)",
+                // Fire and forget Semantic Embedding Storage for re-runs
+                RAGService.chunkAndEmbed(ingestionId, userId, doc.text, supabase, embedSettings).catch(err => {
+                    logger.error(`RAG embedding failed during rerun for ${ingestionId}`, err);
+                });
+
+                baselineTrace.push({
+                    timestamp: new Date().toISOString(),
+                    step: "LLM request (baseline extraction)",
                     details: {
-                        provider: llmSettings.llm_provider ?? llmProvider,
-                        model: llmSettings.llm_model ?? llmModel,
-                        mode: isMultimodalFastPath ? `vision:${multimodalModality ?? "image"}` : "text",
+                        provider: resolvedProvider,
+                        model: resolvedModel,
+                        mode: isMultimodalFastPath
+                            ? `vision:${multimodalModality ?? "image"}${attemptType === "reencoded_image_retry" ? ":reencoded" : ""}`
+                            : "text",
                     }
                 });
 
-            const baselineResult = await PolicyEngine.extractBaseline(
-                doc,
-                { context: baselineConfig?.context, fields: baselineConfig?.fields },
-                llmSettings
-            );
-            const baselineEntities = baselineResult.entities;
-            const autoTags = baselineResult.tags;
-            baselineTrace.push({
-                timestamp: new Date().toISOString(),
-                step: "LLM response (baseline extraction)",
-                details: {
-                    entities_count: Object.keys(baselineEntities).length,
-                    uncertain_count: baselineResult.uncertain_fields.length,
-                    tags_count: autoTags.length,
-                }
-            });
+                const baselineResult = await PolicyEngine.extractBaseline(
+                    doc,
+                    { context: baselineConfig?.context, fields: baselineConfig?.fields },
+                    llmSettings
+                );
+                const baselineEntities = baselineResult.entities;
+                const autoTags = baselineResult.tags;
+                baselineTrace.push({
+                    timestamp: new Date().toISOString(),
+                    step: "LLM response (baseline extraction)",
+                    details: {
+                        entities_count: Object.keys(baselineEntities).length,
+                        uncertain_count: baselineResult.uncertain_fields.length,
+                        tags_count: autoTags.length,
+                    }
+                });
 
-            const entityLines = Object.entries(baselineEntities)
-                .filter(([, v]) => v != null)
-                .map(([k, v]) => `${k}: ${Array.isArray(v) ? (v as unknown[]).join(", ") : String(v)}`);
-            const enrichedDoc = entityLines.length > 0
-                ? { ...doc, text: doc.text + "\n\n[Extracted fields]\n" + entityLines.join("\n") }
-                : doc;
+                const entityLines = Object.entries(baselineEntities)
+                    .filter(([, v]) => v != null)
+                    .map(([k, v]) => `${k}: ${Array.isArray(v) ? (v as unknown[]).join(", ") : String(v)}`);
+                const enrichedDoc = entityLines.length > 0
+                    ? { ...doc, text: doc.text + "\n\n[Extracted fields]\n" + entityLines.join("\n") }
+                    : doc;
 
-            let finalStatus = "no_match";
-            let result: import("./PolicyEngine.js").ProcessingResult;
-            let policyName;
-            try {
+                let finalStatus = "no_match";
+                let result: import("./PolicyEngine.js").ProcessingResult;
                 const forcedPolicyId = opts.forcedPolicyId?.trim();
                 const activePolicies = forcedPolicyId
                     ? userPolicies.filter((policy) => policy.metadata.id === forcedPolicyId)
@@ -787,7 +970,7 @@ export class IngestionService {
                     result = await PolicyEngine.process(enrichedDoc, llmSettings, baselineEntities);
                 }
 
-                policyName = result.matchedPolicy ? activePolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name : undefined;
+                const policyName = result.matchedPolicy ? activePolicies.find((p) => p.metadata.id === result.matchedPolicy)?.metadata.name : undefined;
                 finalStatus = result.status === "fallback" ? "no_match" : result.status;
                 const mergedExtracted = { ...baselineEntities, ...result.extractedData };
 
@@ -846,34 +1029,94 @@ export class IngestionService {
                     await ModelCapabilityService.learnVisionSuccess({
                         supabase,
                         userId,
-                        provider: llmSettings.llm_provider ?? llmProvider,
-                        model: llmSettings.llm_model ?? llmModel,
+                        provider: resolvedProvider,
+                        model: resolvedModel,
                         modality: multimodalModality,
                     });
                 }
 
                 return finalStatus === "matched";
-            } catch (err: unknown) {
-                const msg = err instanceof Error ? err.message : String(err);
-                if (isMultimodalFastPath && multimodalModality) {
-                    const learnedState = await ModelCapabilityService.learnVisionFailure({
-                        supabase,
-                        userId,
-                        provider: llmProvider,
-                        model: llmModel,
-                        error: err,
-                        modality: multimodalModality,
+            };
+
+            let terminalError: unknown = null;
+            try {
+                return await runFastPathAttempt(extractionContent, "primary");
+            } catch (primaryErr) {
+                terminalError = primaryErr;
+            }
+
+            if (isMultimodalFastPath && multimodalModality === "image") {
+                const retryMarker = await this.maybeBuildImageRetryMarker({
+                    error: terminalError,
+                    filePath,
+                    filename,
+                    provider: resolvedProvider,
+                    model: resolvedModel,
+                    phase: "rerun",
+                });
+                if (retryMarker) {
+                    this.bumpImageReencodeRetryMetric("attempted", {
+                        phase: "rerun",
+                        provider: resolvedProvider,
+                        model: resolvedModel,
+                        filename,
                     });
-                    logger.warn(`VLM extraction failed during rerun for ${filename}. Falling back to Heavy Path. Error: ${msg}`);
-                    Actuator.logEvent(ingestionId, userId, "error", "Processing", {
-                        action: "VLM Failed, Fallback to Heavy",
-                        error: msg,
-                        learned_state: learnedState,
+                    Actuator.logEvent(ingestionId, userId, "info", "Processing", {
+                        action: "Retrying VLM with re-encoded image payload",
+                        provider: resolvedProvider,
+                        model: resolvedModel,
                     }, supabase);
-                    isFastPath = false; // Trigger heavy path fallthrough
-                } else {
-                    throw err; // Re-throw to caller
+                    try {
+                        const retryResult = await runFastPathAttempt(retryMarker, "reencoded_image_retry");
+                        this.bumpImageReencodeRetryMetric("succeeded", {
+                            phase: "rerun",
+                            provider: resolvedProvider,
+                            model: resolvedModel,
+                            filename,
+                        });
+                        Actuator.logEvent(ingestionId, userId, "analysis", "Processing", {
+                            action: "VLM re-encoded image retry succeeded",
+                            provider: resolvedProvider,
+                            model: resolvedModel,
+                        }, supabase);
+                        return retryResult;
+                    } catch (retryErr) {
+                        this.bumpImageReencodeRetryMetric("failed", {
+                            phase: "rerun",
+                            provider: resolvedProvider,
+                            model: resolvedModel,
+                            filename,
+                        });
+                        Actuator.logEvent(ingestionId, userId, "error", "Processing", {
+                            action: "VLM re-encoded image retry failed",
+                            provider: resolvedProvider,
+                            model: resolvedModel,
+                            error: this.errorToMessage(retryErr),
+                        }, supabase);
+                        terminalError = retryErr;
+                    }
                 }
+            }
+
+            const msg = this.errorToMessage(terminalError);
+            if (isMultimodalFastPath && multimodalModality) {
+                const learnedState = await ModelCapabilityService.learnVisionFailure({
+                    supabase,
+                    userId,
+                    provider: resolvedProvider,
+                    model: resolvedModel,
+                    error: terminalError,
+                    modality: multimodalModality,
+                });
+                logger.warn(`VLM extraction failed during rerun for ${filename}. Falling back to Heavy Path. Error: ${msg}`);
+                Actuator.logEvent(ingestionId, userId, "error", "Processing", {
+                    action: "VLM Failed, Fallback to Heavy",
+                    error: msg,
+                    learned_state: learnedState,
+                }, supabase);
+                isFastPath = false; // Trigger heavy path fallthrough
+            } else {
+                throw terminalError instanceof Error ? terminalError : new Error(msg); // Re-throw to caller
             }
         }
 

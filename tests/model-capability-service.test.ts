@@ -249,7 +249,7 @@ describe("ModelCapabilityService.learnVisionFailure", () => {
     expect(entry?.evidence).toContain("msg:does not support images");
   });
 
-  it("avoids duplicate invalid-model weighting for realtimexai", async () => {
+  it("treats realtimex invalid-model errors as insufficient capability evidence", async () => {
     const supabase = createSupabaseMock();
     const error = {
       message: "Invalid model",
@@ -266,12 +266,6 @@ describe("ModelCapabilityService.learnVisionFailure", () => {
 
     expect(first).toBe("unknown");
 
-    const pending = supabase.getMap()["realtimexai:text-model"];
-    expect(pending?.state).toBe("pending_unsupported");
-    expect(pending?.evidence).toContain("provider:invalid model");
-    expect(pending?.evidence).not.toContain("weak:invalid model");
-    expect(pending?.evidence).not.toContain("provider:realtimexai_invalid_model");
-
     const second = await ModelCapabilityService.learnVisionFailure({
       supabase: supabase.client,
       userId: "user-7",
@@ -280,7 +274,9 @@ describe("ModelCapabilityService.learnVisionFailure", () => {
       error,
     });
 
-    expect(second).toBe("unsupported");
+    expect(second).toBe("unknown");
+    expect(supabase.getMap()["realtimexai:text-model"]).toBeUndefined();
+    expect(supabase.getWriteCount()).toBe(0);
   });
 
   it("learns capability mismatch for generic vision-not-supported phrasing", async () => {
@@ -308,6 +304,59 @@ describe("ModelCapabilityService.learnVisionFailure", () => {
 
     expect(first).toBe("unknown");
     expect(second).toBe("unsupported");
+  });
+
+  it("does not overwrite active manual support override on automatic failure learning", async () => {
+    const futureExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const supabase = createSupabaseMock({
+      "realtimexai:gpt-5-mini": {
+        state: "supported",
+        learned_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+        reason: "manual_override",
+      },
+    });
+
+    const state = await ModelCapabilityService.learnVisionFailure({
+      supabase: supabase.client,
+      userId: "user-8b",
+      provider: "realtimexai",
+      model: "gpt-5-mini",
+      error: {
+        message: "This model does not support image inputs",
+        status: 400,
+      },
+    });
+
+    expect(state).toBe("unknown");
+    const entry = supabase.getMap()["realtimexai:gpt-5-mini"];
+    expect(entry?.state).toBe("supported");
+    expect(entry?.reason).toBe("manual_override");
+    expect(supabase.getWriteCount()).toBe(0);
+  });
+
+  it("does not overwrite active manual unsupported override on automatic success learning", async () => {
+    const futureExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+    const supabase = createSupabaseMock({
+      "openai:gpt-4.1-mini": {
+        state: "unsupported",
+        learned_at: new Date().toISOString(),
+        expires_at: futureExpiry,
+        reason: "manual_override",
+      },
+    });
+
+    await ModelCapabilityService.learnVisionSuccess({
+      supabase: supabase.client,
+      userId: "user-8c",
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+
+    const entry = supabase.getMap()["openai:gpt-4.1-mini"];
+    expect(entry?.state).toBe("unsupported");
+    expect(entry?.reason).toBe("manual_override");
+    expect(supabase.getWriteCount()).toBe(0);
   });
 
   it("tracks PDF modality separately from image modality", async () => {
