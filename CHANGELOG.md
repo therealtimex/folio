@@ -5,6 +5,10 @@ All notable changes to Folio will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.15] - 2026-03-01
+### Changed
+- Increased document detail modal width from `max-w-xl` (576px) to `max-w-3xl` (768px) to give the policy match block adequate horizontal space.
+
 ## [0.1.14] - 2026-03-01
 ### Added
 - Separate ingestion LLM model settings (`ingestion_llm_provider`, `ingestion_llm_model`) independent from chat model settings, with backward-compatible fallback to chat settings when ingestion settings are unset.

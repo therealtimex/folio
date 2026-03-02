@@ -530,7 +530,7 @@ export function IngestionDetailModal({ ingestion: ing, onClose, onRerun, onTagsC
                 }
             }}
         >
-            <div className="bg-background border rounded-2xl shadow-2xl w-full max-w-xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="bg-background border rounded-2xl shadow-2xl w-full max-w-3xl flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
                 {/* Header */}
                 <div className="flex items-start gap-3 px-6 pt-5 pb-4 border-b">
                     <div className="w-8 h-8 rounded-lg bg-muted flex items-center justify-center shrink-0 mt-0.5">
