@@ -5,6 +5,18 @@ All notable changes to Folio will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.14] - 2026-03-01
+### Added
+- Separate ingestion LLM model settings (`ingestion_llm_provider`, `ingestion_llm_model`) independent from chat model settings, with backward-compatible fallback to chat settings when ingestion settings are unset.
+- New database columns `ingestion_llm_provider` and `ingestion_llm_model` on `user_settings` (nullable, no default) via migration `20260302000000_add_ingestion_llm_settings.sql`.
+- `IngestionService.resolveIngestionLlmSettings` — public static helper that applies the ingestion → chat fallback chain; used consistently across both fast paths (`ingest`, `rerun`) and the summarize route.
+- Intelligence settings UI now shows a three-column layout with separate "Chat LLM" and "Ingestion LLM" provider/model selectors.
+- `ModelCapabilityService.resolveVisionSupport` now prefers `ingestion_llm_provider`/`ingestion_llm_model` so VLM triage decisions reflect the actual ingestion model.
+- Ingestion model context included in system prompt metadata passed to the AI assistant.
+
+### Tests
+- Added regression for `resolveVisionSupport` preferring ingestion model settings over chat model settings when both are set.
+
 ## [0.1.13] - 2026-03-01
 ### Added
 - Image re-encode retry on VLM fast path: when a VLM call fails with an `"invalid model"` error, the ingestion service now re-encodes the image to PNG via `sips` and retries once before falling back to the heavy path. Controlled by `FOLIO_VLM_IMAGE_REENCODE_RETRY_ENABLED` (default `true`). Retry metrics (attempted / succeeded / failed / skipped) are emitted to the logger and LiveTerminal.

@@ -23,6 +23,8 @@ type VisionCapabilityMap = Record<string, StoredVisionCapability>;
 interface SettingsLike {
     llm_provider?: string | null;
     llm_model?: string | null;
+    ingestion_llm_provider?: string | null;
+    ingestion_llm_model?: string | null;
     vision_model_capabilities?: unknown;
 }
 
@@ -59,8 +61,16 @@ export class ModelCapabilityService {
         settingsRow: SettingsLike | null | undefined,
         modality: VisionCapabilityModality = "image"
     ): VisionResolution {
-        const provider = (settingsRow?.llm_provider || SDKService.DEFAULT_LLM_PROVIDER).trim();
-        const model = (settingsRow?.llm_model || SDKService.DEFAULT_LLM_MODEL).trim();
+        const provider = (
+            settingsRow?.ingestion_llm_provider ||
+            settingsRow?.llm_provider ||
+            SDKService.DEFAULT_LLM_PROVIDER
+        ).trim();
+        const model = (
+            settingsRow?.ingestion_llm_model ||
+            settingsRow?.llm_model ||
+            SDKService.DEFAULT_LLM_MODEL
+        ).trim();
         const state = this.getVisionState(settingsRow?.vision_model_capabilities, provider, model, modality);
         return {
             provider,

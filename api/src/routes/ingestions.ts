@@ -209,14 +209,11 @@ router.post(
         }
         const { data: settingsRow } = await req.supabase
             .from("user_settings")
-            .select("llm_provider, llm_model")
+            .select("llm_provider, llm_model, ingestion_llm_provider, ingestion_llm_model")
             .eq("user_id", req.user.id)
             .maybeSingle();
 
-        const llmSettings = {
-            llm_provider: settingsRow?.llm_provider ?? undefined,
-            llm_model: settingsRow?.llm_model ?? undefined,
-        };
+        const llmSettings = IngestionService.resolveIngestionLlmSettings(settingsRow);
 
         const summary = await IngestionService.summarize(
             req.params["id"] as string,

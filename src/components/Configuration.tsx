@@ -30,7 +30,9 @@ export function Configuration() {
             active_rules: state.rules.filter(r => r.is_enabled).map(r => r.name),
             current_settings: {
                 llm_provider: localSettings.llm_provider,
-                llm_model: localSettings.llm_model
+                llm_model: localSettings.llm_model,
+                ingestion_llm_provider: localSettings.ingestion_llm_provider,
+                ingestion_llm_model: localSettings.ingestion_llm_model,
             }
         }
     });
@@ -62,6 +64,11 @@ export function Configuration() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     const availableModels = selectedProvider?.models || [];
 
+    const effectiveIngestionProvider = localSettings.ingestion_llm_provider || localSettings.llm_provider || DEFAULT_PROVIDER;
+    const selectedIngestionProvider = chatProviders.find(p => p.provider === effectiveIngestionProvider);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const availableIngestionModels = selectedIngestionProvider?.models || [];
+
     const selectedEmbedProvider = embedProviders.find(p => p.provider === (localSettings.embedding_provider || DEFAULT_PROVIDER));
     // eslint-disable-next-line react-hooks/exhaustive-deps
     const availableEmbedModels = selectedEmbedProvider?.models || [];
@@ -80,6 +87,22 @@ export function Configuration() {
         if (hasProvider) return chatProviders;
         return [{ provider: localSettings.llm_provider, name: `${localSettings.llm_provider} (saved)`, models: [] }, ...chatProviders];
     }, [chatProviders, localSettings.llm_provider]);
+
+    const ingestionModelsWithSaved = useMemo(() => {
+        const effectiveModel = localSettings.ingestion_llm_model || localSettings.llm_model;
+        if (!effectiveModel) return availableIngestionModels;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const hasModel = availableIngestionModels.some((m: any) => m.id === effectiveModel);
+        if (hasModel) return availableIngestionModels;
+        return [{ id: effectiveModel, name: `${effectiveModel} (saved)` }, ...availableIngestionModels];
+    }, [availableIngestionModels, localSettings.ingestion_llm_model, localSettings.llm_model]);
+
+    const ingestionProvidersWithSaved = useMemo(() => {
+        if (!localSettings.ingestion_llm_provider || localSettings.ingestion_llm_provider === DEFAULT_PROVIDER) return chatProviders;
+        const hasProvider = chatProviders.some(p => p.provider === localSettings.ingestion_llm_provider);
+        if (hasProvider) return chatProviders;
+        return [{ provider: localSettings.ingestion_llm_provider, name: `${localSettings.ingestion_llm_provider} (saved)`, models: [] }, ...chatProviders];
+    }, [chatProviders, localSettings.ingestion_llm_provider]);
 
     const embedModelsWithSaved = useMemo(() => {
         if (!localSettings.embedding_model) return availableEmbedModels;
@@ -113,6 +136,16 @@ export function Configuration() {
             ...s,
             embedding_provider: providerId,
             embedding_model: provider?.models?.[0]?.id || ''
+        }));
+    };
+
+    const handleIngestionProviderChange = (providerId: string) => {
+        const provider = chatProviders.find(p => p.provider === providerId);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        setLocalSettings((s: any) => ({
+            ...s,
+            ingestion_llm_provider: providerId,
+            ingestion_llm_model: provider?.models?.[0]?.id || ''
         }));
     };
 
@@ -201,8 +234,11 @@ export function Configuration() {
                             modelsWithSaved={modelsWithSaved}
                             embedProvidersWithSaved={embedProvidersWithSaved}
                             embedModelsWithSaved={embedModelsWithSaved}
+                            ingestionProvidersWithSaved={ingestionProvidersWithSaved}
+                            ingestionModelsWithSaved={ingestionModelsWithSaved}
                             handleProviderChange={handleProviderChange}
                             handleEmbedProviderChange={handleEmbedProviderChange}
+                            handleIngestionProviderChange={handleIngestionProviderChange}
                             DEFAULT_PROVIDER={DEFAULT_PROVIDER}
                         />
                     </TabsContent>

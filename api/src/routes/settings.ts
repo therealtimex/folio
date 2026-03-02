@@ -36,6 +36,8 @@ router.patch("/", asyncHandler(async (req, res) => {
     const payload = {
         llm_provider: body.llm_provider,
         llm_model: body.llm_model,
+        ingestion_llm_provider: body.ingestion_llm_provider,
+        ingestion_llm_model: body.ingestion_llm_model,
         sync_interval_minutes: body.sync_interval_minutes,
         tts_auto_play: body.tts_auto_play,
         tts_provider: body.tts_provider,

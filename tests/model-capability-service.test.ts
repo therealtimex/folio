@@ -425,6 +425,33 @@ describe("ModelCapabilityService.learnVisionFailure", () => {
     expect(supabase.getWriteCount()).toBe(0);
   });
 
+  it("prefers ingestion model settings when resolving vision support", () => {
+    const expiry = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const resolution = ModelCapabilityService.resolveVisionSupport({
+      llm_provider: "realtimexai",
+      llm_model: "chat-model",
+      ingestion_llm_provider: "realtimexai",
+      ingestion_llm_model: "ingest-model",
+      vision_model_capabilities: {
+        "realtimexai:chat-model": {
+          state: "supported",
+          learned_at: new Date().toISOString(),
+          expires_at: expiry,
+        },
+        "realtimexai:ingest-model": {
+          state: "unsupported",
+          learned_at: new Date().toISOString(),
+          expires_at: expiry,
+        },
+      },
+    });
+
+    expect(resolution.provider).toBe("realtimexai");
+    expect(resolution.model).toBe("ingest-model");
+    expect(resolution.state).toBe("unsupported");
+    expect(resolution.shouldAttempt).toBe(false);
+  });
+
   it("learns PDF capability from provider-specific signal plus client-validation status", async () => {
     const supabase = createSupabaseMock();
     const error = {

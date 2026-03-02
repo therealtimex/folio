@@ -262,6 +262,18 @@ export class IngestionService {
         return `data:${mimeType};base64,${base64}`;
     }
 
+    static resolveIngestionLlmSettings(settingsRow: {
+        llm_provider?: string | null;
+        llm_model?: string | null;
+        ingestion_llm_provider?: string | null;
+        ingestion_llm_model?: string | null;
+    } | null | undefined): { llm_provider?: string; llm_model?: string } {
+        return {
+            llm_provider: settingsRow?.ingestion_llm_provider ?? settingsRow?.llm_provider ?? undefined,
+            llm_model: settingsRow?.ingestion_llm_model ?? settingsRow?.llm_model ?? undefined,
+        };
+    }
+
     private static errorToMessage(error: unknown): string {
         if (error instanceof Error) return error.message;
         if (typeof error === "string") return error;
@@ -426,7 +438,7 @@ export class IngestionService {
         // Pre-fetch settings to decide whether we should attempt VLM.
         const { data: triageSettingsRow } = await supabase
             .from("user_settings")
-            .select("llm_provider, llm_model, embedding_provider, embedding_model, vision_model_capabilities")
+            .select("llm_provider, llm_model, ingestion_llm_provider, ingestion_llm_model, embedding_provider, embedding_model, vision_model_capabilities")
             .eq("user_id", userId)
             .maybeSingle();
         const imageResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow, "image");
@@ -502,13 +514,10 @@ export class IngestionService {
                 // 3. Fast Path — fetch all dependencies in parallel
                 const [userPolicies, processingSettingsRow, baselineConfig] = await Promise.all([
                     PolicyLoader.load(false, supabase),
-                    supabase.from("user_settings").select("llm_provider, llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
+                    supabase.from("user_settings").select("llm_provider, llm_model, ingestion_llm_provider, ingestion_llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
                     BaselineConfigService.getActive(supabase, userId),
                 ]);
-                const llmSettings = {
-                    llm_provider: processingSettingsRow.data?.llm_provider ?? undefined,
-                    llm_model: processingSettingsRow.data?.llm_model ?? undefined,
-                };
+                const llmSettings = this.resolveIngestionLlmSettings(processingSettingsRow.data);
                 const embedSettings = {
                     embedding_provider: processingSettingsRow.data?.embedding_provider ?? undefined,
                     embedding_model: processingSettingsRow.data?.embedding_model ?? undefined,
@@ -809,7 +818,7 @@ export class IngestionService {
 
         const { data: triageSettingsRow } = await supabase
             .from("user_settings")
-            .select("llm_provider, llm_model, embedding_provider, embedding_model, vision_model_capabilities")
+            .select("llm_provider, llm_model, ingestion_llm_provider, ingestion_llm_model, embedding_provider, embedding_model, vision_model_capabilities")
             .eq("user_id", userId)
             .maybeSingle();
         const imageResolution = ModelCapabilityService.resolveVisionSupport(triageSettingsRow, "image");
@@ -881,13 +890,10 @@ export class IngestionService {
         if (isFastPath) {
             const [userPolicies, processingSettingsRow, baselineConfig] = await Promise.all([
                 PolicyLoader.load(false, supabase),
-                supabase.from("user_settings").select("llm_provider, llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
+                supabase.from("user_settings").select("llm_provider, llm_model, ingestion_llm_provider, ingestion_llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
                 BaselineConfigService.getActive(supabase, userId),
             ]);
-            const llmSettings = {
-                llm_provider: processingSettingsRow.data?.llm_provider ?? undefined,
-                llm_model: processingSettingsRow.data?.llm_model ?? undefined,
-            };
+            const llmSettings = this.resolveIngestionLlmSettings(processingSettingsRow.data);
             const embedSettings = {
                 embedding_provider: processingSettingsRow.data?.embedding_provider ?? undefined,
                 embedding_model: processingSettingsRow.data?.embedding_model ?? undefined,

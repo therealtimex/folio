@@ -30,8 +30,8 @@ function parseVisionCapabilityRows(localSettings: any, defaultProvider: string) 
         isCurrent: boolean;
     }> = [];
 
-    const currentProvider = (localSettings.llm_provider || defaultProvider || "").trim();
-    const currentModel = (localSettings.llm_model || "").trim();
+    const currentProvider = (localSettings.ingestion_llm_provider || localSettings.llm_provider || defaultProvider || "").trim();
+    const currentModel = (localSettings.ingestion_llm_model || localSettings.llm_model || "").trim();
     const currentImageKey = currentProvider && currentModel ? `${currentProvider}:${currentModel}` : "";
     const currentPdfKey = currentProvider && currentModel ? `${currentProvider}:${currentModel}:pdf` : "";
 
@@ -114,9 +114,12 @@ export function IntelligenceTab({
     testingLlm,
     providersWithSaved,
     modelsWithSaved,
+    ingestionProvidersWithSaved,
+    ingestionModelsWithSaved,
     embedProvidersWithSaved,
     embedModelsWithSaved,
     handleProviderChange,
+    handleIngestionProviderChange,
     handleEmbedProviderChange,
     DEFAULT_PROVIDER
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -172,11 +175,11 @@ export function IntelligenceTab({
                     </CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <div className="space-y-4">
-                            <label className="text-sm font-medium" htmlFor="llm-provider-select">LLM Provider</label>
+                            <label className="text-sm font-medium" htmlFor="chat-llm-provider-select">Chat LLM Provider</label>
                             <select
-                                id="llm-provider-select"
+                                id="chat-llm-provider-select"
                                 className="w-full h-10 border rounded-md px-3 bg-background"
                                 value={localSettings.llm_provider || DEFAULT_PROVIDER}
                                 onChange={(e) => handleProviderChange(e.target.value)}
@@ -186,15 +189,41 @@ export function IntelligenceTab({
                                     <option key={p.provider} value={p.provider}>{p.name || p.provider}</option>
                                 ))}
                             </select>
-                            <label className="text-sm font-medium" htmlFor="llm-model-select">LLM Model</label>
+                            <label className="text-sm font-medium" htmlFor="chat-llm-model-select">Chat LLM Model</label>
                             <select
-                                id="llm-model-select"
+                                id="chat-llm-model-select"
                                 className="w-full h-10 border rounded-md px-3 bg-background"
                                 value={localSettings.llm_model || ''}
                                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                 onChange={(e) => setLocalSettings((s: any) => ({ ...s, llm_model: e.target.value }))}
                             >
                                 {modelsWithSaved.map((m: Record<string, string>) => (
+                                    <option key={m.id} value={m.id}>{m.name || m.id}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="space-y-4">
+                            <label className="text-sm font-medium" htmlFor="ingestion-llm-provider-select">Ingestion LLM Provider</label>
+                            <select
+                                id="ingestion-llm-provider-select"
+                                className="w-full h-10 border rounded-md px-3 bg-background"
+                                value={localSettings.ingestion_llm_provider || localSettings.llm_provider || DEFAULT_PROVIDER}
+                                onChange={(e) => handleIngestionProviderChange(e.target.value)}
+                            >
+                                <option value={DEFAULT_PROVIDER}>RealTimeX AI</option>
+                                {ingestionProvidersWithSaved.filter((p: Record<string, string>) => p.provider !== DEFAULT_PROVIDER).map((p: Record<string, string>) => (
+                                    <option key={p.provider} value={p.provider}>{p.name || p.provider}</option>
+                                ))}
+                            </select>
+                            <label className="text-sm font-medium" htmlFor="ingestion-llm-model-select">Ingestion LLM Model</label>
+                            <select
+                                id="ingestion-llm-model-select"
+                                className="w-full h-10 border rounded-md px-3 bg-background"
+                                value={localSettings.ingestion_llm_model || localSettings.llm_model || ''}
+                                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                                onChange={(e) => setLocalSettings((s: any) => ({ ...s, ingestion_llm_model: e.target.value }))}
+                            >
+                                {ingestionModelsWithSaved.map((m: Record<string, string>) => (
                                     <option key={m.id} value={m.id}>{m.name || m.id}</option>
                                 ))}
                             </select>

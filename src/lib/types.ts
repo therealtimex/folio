@@ -26,6 +26,8 @@ export interface UserSettings {
   user_id: string;
   llm_provider: string | null;
   llm_model: string | null;
+  ingestion_llm_provider?: string | null;
+  ingestion_llm_model?: string | null;
   sync_interval_minutes: number;
   auto_trash_spam?: boolean;
   smart_drafts?: boolean;
