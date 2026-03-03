@@ -1,4 +1,6 @@
 import { RealtimeXSDK, ProvidersResponse } from "@realtimex/sdk";
+import os from "node:os";
+import path from "node:path";
 
 import { createLogger } from "../utils/logger.js";
 
@@ -48,7 +50,6 @@ export class SDKService {
 
         logger.info("RealTimeX SDK initialized successfully");
 
-        // @ts-ignore ping available in desktop bridge
         this.instance.ping?.().catch(() => {
           logger.warn("Desktop ping failed during startup");
         });
@@ -77,7 +78,6 @@ export class SDKService {
 
       // Try to ping first (faster)
       try {
-        // @ts-ignore ping available in desktop bridge
         await sdk.ping();
         return true;
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -109,6 +109,51 @@ export class SDKService {
     } finally {
       clearTimeout(timeoutHandle);
     }
+  }
+
+  private static appDataDir: string | null = null;
+
+  static async getAppDataDir(): Promise<string | null> {
+    if (this.appDataDir) {
+      return this.appDataDir;
+    }
+
+    const sdk = this.getSDK();
+    if (!sdk) {
+      return null;
+    }
+
+    try {
+      const dataDir = await this.withTimeout<string>(
+        sdk.getAppDataDir(),
+        10000,
+        "App data directory fetch timed out"
+      );
+
+      if (!dataDir || !dataDir.trim()) {
+        return null;
+      }
+
+      this.appDataDir = dataDir;
+      return dataDir;
+    } catch (error) {
+      logger.warn("Failed to get app data directory from SDK", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return null;
+    }
+  }
+
+  static async getDefaultDropzoneDir(): Promise<string> {
+    const sdkDataDir = await this.getAppDataDir();
+    if (sdkDataDir) {
+      return path.join(sdkDataDir, "dropzone");
+    }
+
+    const sdkAppId = this.getSDK()?.appId?.trim();
+    const envAppId = process.env.RTX_APP_ID?.trim();
+    const fallbackAppId = sdkAppId || envAppId || "folio";
+    return path.join(os.homedir(), ".realtimex.ai", "Resources", "local-apps", fallbackAppId, "dropzone");
   }
 
   // Cache for default providers (avoid repeated SDK calls)
@@ -243,6 +288,7 @@ export class SDKService {
   }
 
   static clearProviderCache(): void {
+    this.appDataDir = null;
     this.defaultChatProvider = null;
     this.defaultEmbedProvider = null;
   }

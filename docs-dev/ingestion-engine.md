@@ -9,13 +9,14 @@ Think of `realtimex.ai` desktop app as your backend API, even though it's runnin
 
 #### Step 0: The Dropzone
 *   Folio does **not** store raw document bytes in the database.
-*   Folio creates a physical "Dropzone" folder on the local machine (e.g., `~/.realtimex/folio/dropzone` or a configured `storage_path`).
+*   Folio creates a physical "Dropzone" folder on the local machine (e.g., `~/.realtimex.ai/Resources/local-apps/{appId}/dropzone` via `sdk.getAppDataDir()` or a configured `storage_path`).
+*   In development mode with API key auth, the SDK resolves this directory from the masked API key to avoid collisions across environments.
 
 #### Step 1: Ingestion (Folio)
 *   Folio detects or receives `scan_001.pdf` via the UI or Watcher.
 *   Folio saves the physical file into the **Dropzone**.
 *   Folio generates a `task_id` and inserts a task into the `rtx_activities` table (Compatible Mode).
-*   **Crucially**: The `raw_data` JSON only contains a metadata pointer to the physical file: `{ "file_path": "/Users/local/.realtimex/folio/dropzone/scan_001.pdf" }`.
+*   **Crucially**: The `raw_data` JSON only contains a metadata pointer to the physical file: `{ "file_path": "/Users/local/.realtimex.ai/Resources/local-apps/{appId}/dropzone/scan_001.pdf" }`.
 
 #### Step 2: The Handshake (Folio $\rightarrow$ RealTimeX SDK)
 Folio uses the RealTimeX SDK (via Compatible Mode `rtx_fn_claim_task`) to queue the work. The extraction schema (derived from the Policy) is also provided so the LLM output is strictly typed JSON.
@@ -66,4 +67,3 @@ graph LR
     C -->|Trigger Action| H(Folio Actuator)
     H -->|Move File| I[Organized Final Folder]
 ```
-

@@ -5,6 +5,13 @@ All notable changes to Folio will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.16] - 2026-03-02
+### Changed
+- Dropzone directory resolution now delegates to `SDKService.getDefaultDropzoneDir()`, which queries `sdk.getAppDataDir()` (with a 10 s timeout) and falls back to `~/.realtimex.ai/Resources/local-apps/{appId}/dropzone`. Users with no configured `storage_path`, or whose path still points to the legacy `~/.realtimex/folio/dropzone` default, are migrated automatically.
+
+### Fixed
+- Removed stale `// @ts-ignore` annotations on `sdk.ping()` calls now that `ping`, `getAppDataDir`, and `appId` are present in the SDK type definitions.
+
 ## [0.1.15] - 2026-03-01
 ### Changed
 - Increased document detail modal width from `max-w-xl` (576px) to `max-w-3xl` (768px) to give the policy match block adequate horizontal space.

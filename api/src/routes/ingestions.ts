@@ -7,6 +7,7 @@ import crypto from "crypto";
 import { asyncHandler } from "../middleware/errorHandler.js";
 import { optionalAuth } from "../middleware/auth.js";
 import { IngestionService } from "../services/IngestionService.js";
+import { SDKService } from "../services/SDKService.js";
 
 const router = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } });
@@ -68,7 +69,11 @@ router.post(
             .eq("user_id", req.user.id)
             .maybeSingle();
 
-        const dropzoneDir = settings?.storage_path || path.join(os.homedir(), ".realtimex", "folio", "dropzone");
+        const configuredStoragePath = typeof settings?.storage_path === "string" ? settings.storage_path.trim() : "";
+        const legacyDefaultDropzoneDir = path.join(os.homedir(), ".realtimex", "folio", "dropzone");
+        const dropzoneDir = !configuredStoragePath || configuredStoragePath === legacyDefaultDropzoneDir
+            ? await SDKService.getDefaultDropzoneDir()
+            : configuredStoragePath;
         await fs.mkdir(dropzoneDir, { recursive: true });
 
         // Compute SHA-256 hash before writing — used for deduplication
