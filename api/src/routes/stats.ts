@@ -20,33 +20,37 @@ router.get("/", async (req, res) => {
     }
 
     try {
-        const userId = req.user.id;
+        const workspaceId = req.workspaceId;
+        if (!workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
         const s = req.supabase; // the scoped service client
 
         // 1. Total Documents Ingested
         const { count: totalDocumentsCount, error: err1 } = await s
             .from("ingestions")
             .select("*", { count: 'exact', head: true })
-            .eq("user_id", userId);
+            .eq("workspace_id", workspaceId);
 
         // 2. Active Policies
         const { count: activePoliciesCount, error: err2 } = await s
             .from("policies")
             .select("*", { count: 'exact', head: true })
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .eq("enabled", true);
 
         // 3. RAG Knowledge Base (Chunks)
         const { count: ragChunksCount, error: err3 } = await s
             .from("document_chunks")
             .select("*", { count: 'exact', head: true })
-            .eq("user_id", userId);
+            .eq("workspace_id", workspaceId);
 
         // 4. Automation Runs (Sum of actions taken across ingestions)
         const { data: ingestionsWithActions, error: err4 } = await s
             .from("ingestions")
             .select("actions_taken")
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .not("actions_taken", "is", null);
 
         let automationRunsCount = 0;

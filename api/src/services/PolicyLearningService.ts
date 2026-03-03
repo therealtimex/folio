@@ -276,11 +276,19 @@ export class PolicyLearningService {
     static async recordManualMatch(opts: {
         supabase: SupabaseClient;
         userId: string;
+        workspaceId?: string;
         ingestion: IngestionLike;
         policyId: string;
         policyName?: string;
     }): Promise<void> {
-        const { supabase, userId, ingestion, policyId, policyName } = opts;
+        const { supabase, userId, workspaceId, ingestion, policyId, policyName } = opts;
+        if (!workspaceId) {
+            logger.warn("Skipping policy learning feedback: missing workspace context", {
+                ingestionId: ingestion.id,
+                policyId,
+            });
+            return;
+        }
         const features = buildFromIngestionRow(ingestion);
 
         if (features.tokens.length === 0) {
@@ -292,6 +300,7 @@ export class PolicyLearningService {
         }
 
         const row = {
+            workspace_id: workspaceId,
             user_id: userId,
             ingestion_id: ingestion.id,
             policy_id: policyId,
@@ -302,7 +311,7 @@ export class PolicyLearningService {
 
         const { error } = await supabase
             .from("policy_match_feedback")
-            .upsert(row, { onConflict: "user_id,ingestion_id,policy_id" });
+            .upsert(row, { onConflict: "workspace_id,ingestion_id,policy_id" });
 
         if (error) {
             logger.error("Failed to save policy match feedback", {
@@ -323,15 +332,19 @@ export class PolicyLearningService {
     static async getPolicyLearningStats(opts: {
         supabase: SupabaseClient;
         userId: string;
+        workspaceId?: string;
         policyIds?: string[];
     }): Promise<PolicyLearningStats> {
-        const { supabase, userId } = opts;
+        const { supabase, userId, workspaceId } = opts;
+        if (!workspaceId) {
+            return {};
+        }
         const normalizedPolicyIds = (opts.policyIds ?? []).map((id) => id.trim()).filter(Boolean);
 
         let query = supabase
             .from("policy_match_feedback")
             .select("policy_id,created_at")
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .order("created_at", { ascending: false })
             .limit(5000);
 
@@ -366,18 +379,30 @@ export class PolicyLearningService {
     static async resolveLearnedCandidate(opts: {
         supabase: SupabaseClient;
         userId: string;
+        workspaceId?: string;
         policyIds: string[];
         filePath: string;
         baselineEntities: Record<string, unknown>;
         documentText?: string;
     }): Promise<LearnedCandidateResolution> {
-        const { supabase, userId, policyIds, filePath, baselineEntities, documentText } = opts;
+        const { supabase, userId, workspaceId, policyIds, filePath, baselineEntities, documentText } = opts;
         if (policyIds.length === 0) {
             return {
                 candidate: null,
                 diagnostics: {
                     reason: "no_policy_ids",
                     evaluatedPolicies: 0,
+                    evaluatedSamples: 0,
+                    topCandidates: [],
+                },
+            };
+        }
+        if (!workspaceId) {
+            return {
+                candidate: null,
+                diagnostics: {
+                    reason: "no_feedback_samples",
+                    evaluatedPolicies: policyIds.length,
                     evaluatedSamples: 0,
                     topCandidates: [],
                 },
@@ -400,7 +425,7 @@ export class PolicyLearningService {
         const { data, error } = await supabase
             .from("policy_match_feedback")
             .select("policy_id,policy_name,features")
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .in("policy_id", policyIds)
             .order("created_at", { ascending: false })
             .limit(400);

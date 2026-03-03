@@ -15,8 +15,17 @@ router.use(optionalAuth);
 router.get(
     "/",
     asyncHandler(async (req, res) => {
-        const policies = await PolicyLoader.load(false, req.supabase);
-        if (!req.supabase || !req.user || policies.length === 0) {
+        if (!req.supabase || !req.user) {
+            const policies = await PolicyLoader.load(false, req.supabase, req.workspaceId);
+            res.json({ success: true, policies });
+            return;
+        }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
+        const policies = await PolicyLoader.load(false, req.supabase, req.workspaceId);
+        if (policies.length === 0) {
             res.json({ success: true, policies });
             return;
         }
@@ -24,6 +33,7 @@ router.get(
         const stats = await PolicyLearningService.getPolicyLearningStats({
             supabase: req.supabase,
             userId: req.user.id,
+            workspaceId: req.workspaceId,
             policyIds: policies.map((policy) => policy.metadata.id),
         });
 
@@ -47,12 +57,20 @@ router.get(
 router.post(
     "/",
     asyncHandler(async (req, res) => {
+        if (!req.supabase || !req.user) {
+            res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
         const policy = req.body;
         if (!PolicyLoader.validate(policy)) {
             res.status(400).json({ success: false, error: "Invalid policy schema" });
             return;
         }
-        const filePath = await PolicyLoader.save(policy, req.supabase, req.user?.id);
+        const filePath = await PolicyLoader.save(policy, req.supabase, req.user.id, req.workspaceId);
         res.status(201).json({ success: true, filePath });
     })
 );
@@ -61,7 +79,15 @@ router.post(
 router.delete(
     "/:id",
     asyncHandler(async (req, res) => {
-        const deleted = await PolicyLoader.delete(req.params["id"] as string, req.supabase, req.user?.id);
+        if (!req.supabase || !req.user) {
+            res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
+        const deleted = await PolicyLoader.delete(req.params["id"] as string, req.supabase, req.user.id, req.workspaceId);
         if (!deleted) {
             res.status(404).json({ success: false, error: "Policy not found" });
             return;
@@ -74,12 +100,21 @@ router.delete(
 router.patch(
     "/:id",
     asyncHandler(async (req, res) => {
+        if (!req.supabase || !req.user) {
+            res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
         const { enabled, name, description, tags, priority } = req.body;
         await PolicyLoader.patch(
             req.params["id"] as string,
             { enabled, name, description, tags, priority },
             req.supabase,
-            req.user?.id
+            req.user.id,
+            req.workspaceId
         );
         res.json({ success: true });
     })
@@ -89,8 +124,16 @@ router.patch(
 router.post(
     "/reload",
     asyncHandler(async (req, res) => {
-        PolicyLoader.invalidateCache();
-        const policies = await PolicyLoader.load(true, req.supabase);
+        if (!req.supabase || !req.user) {
+            res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
+        PolicyLoader.invalidateCache(req.workspaceId);
+        const policies = await PolicyLoader.load(true, req.supabase, req.workspaceId);
         res.json({ success: true, count: policies.length });
     })
 );

@@ -24,7 +24,8 @@ export class ChatService {
         sessionId: string,
         userId: string,
         content: string,
-        supabase: SupabaseClient
+        supabase: SupabaseClient,
+        workspaceId?: string
     ): Promise<Message> {
         // 1. Get User/Session Settings (Models to use)
         const { data: settings } = await supabase
@@ -75,7 +76,12 @@ export class ChatService {
                 content,
                 userId,
                 supabase,
-                { topK: 5, similarityThreshold: 0.65, settings: embedSettings }
+                {
+                    topK: 5,
+                    similarityThreshold: 0.65,
+                    settings: embedSettings,
+                    workspaceId
+                }
             );
             Actuator.logEvent(null, userId, "analysis", "RAG Retrieval", {
                 action: "RAG query response",

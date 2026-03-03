@@ -25,6 +25,7 @@ ALTER TABLE chat_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
 
 -- Policies for chat_sessions
+DROP POLICY IF EXISTS "Users can manage their own chat sessions" ON chat_sessions;
 CREATE POLICY "Users can manage their own chat sessions"
     ON chat_sessions
     FOR ALL
@@ -32,6 +33,7 @@ CREATE POLICY "Users can manage their own chat sessions"
     WITH CHECK (user_id = auth.uid());
 
 -- Policies for chat_messages
+DROP POLICY IF EXISTS "Users can manage their own chat messages" ON chat_messages;
 CREATE POLICY "Users can manage their own chat messages"
     ON chat_messages
     FOR ALL
@@ -54,6 +56,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trigger_update_chat_session_timestamp ON chat_messages;
 CREATE TRIGGER trigger_update_chat_session_timestamp
 AFTER INSERT ON chat_messages
 FOR EACH ROW

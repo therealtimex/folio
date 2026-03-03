@@ -5,6 +5,30 @@ All notable changes to Folio will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.17] - 2026-03-03
+### Added
+- **Workspace multi-tenancy** — all data (ingestions, policies, document chunks, policy match feedback) is now scoped to a `workspace_id` rather than `user_id`, enabling shared workspaces across team members.
+- `auth` middleware now resolves the active workspace from the `X-Workspace-Id` request header, falling back to the user's earliest active membership. `req.workspaceId` and `req.workspaceRole` are set for all authenticated requests. Backward-compatible: deployments without the workspace migration (missing `workspace_members` table) continue to function.
+- New `/api/workspaces` route covering: list workspaces, list members, invite member, update member role, remove member.
+- **Workspace & Team** settings tab in `AccountSettingsPage` — switch active workspace, view members, invite by email, update roles, remove members (with confirmation dialog). Owners cannot be demoted or removed.
+- OTP email login as an alternative to password login on `LoginPage` — two-step flow (send code → verify 6-digit code), with resend support. `shouldCreateUser: false` prevents account creation via OTP.
+- Active workspace persisted in `localStorage` (`folio_active_workspace_id`) and propagated via `X-Workspace-Id` header on every API request. `api.setActiveWorkspaceId()` dispatches a `folio:workspace-changed` custom event for reactive UI updates.
+- `search_workspace_documents` Supabase RPC for workspace-scoped vector search (falls back to existing `search_documents` when no workspace context is present).
+
+### Changed
+- `PolicyLoader` cache key changed from `user_id` to `workspace_id`; cache is invalidated per-workspace on save, patch, and delete.
+- `PolicyLearningService`, `RAGService`, `IngestionService`, `PolicyEngine`, `ChatService` all accept and propagate `workspaceId` throughout.
+- `IngestionService.list`, `.get`, `.delete` signatures simplified — `userId` parameter removed, replaced by `workspaceId`.
+- Stats endpoint (`GET /api/stats`) now queries by `workspace_id` and returns `403` (not `400`) when no workspace context is present, consistent with all other endpoints.
+- `LoginPage` OTP/password mode toggle resets cleanly when switching to sign-up mode. `useEffect`-based `isSignUp` sync removed in favour of `key` prop on the component.
+- Member removal confirmation replaced with an in-app `Dialog` component (previously used `window.confirm`).
+
+### Database migrations
+- `20260303000000_add_workspaces_phase1.sql` — `workspaces` and `workspace_members` tables, RLS, unique constraints on `(workspace_id, policy_id)` and `(workspace_id, ingestion_id, policy_id)`, workspace_id columns backfilled.
+- `20260303010000_add_workspace_management_rpc.sql` — RPCs for workspace management.
+- `20260303020000_workspace_scope_document_chunks.sql` — `workspace_id` column on `document_chunks`, `search_workspace_documents` RPC.
+- Existing migrations made idempotent (`DROP … IF EXISTS`, `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, publication guard).
+
 ## [0.1.16] - 2026-03-02
 ### Changed
 - Dropzone directory resolution now delegates to `SDKService.getDefaultDropzoneDir()`, which queries `sdk.getAppDataDir()` (with a 10 s timeout) and falls back to `~/.realtimex.ai/Resources/local-apps/{appId}/dropzone`. Users with no configured `storage_path`, or whose path still points to the legacy `~/.realtimex/folio/dropzone` default, are migrated automatically.

@@ -3,6 +3,10 @@ import {
     User,
     ShieldCheck,
     Database,
+    Users,
+    UserPlus,
+    Crown,
+    Trash2,
     LogOut,
     Camera,
     Volume2,
@@ -23,10 +27,12 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Badge } from "./ui/badge";
 import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { AuthPanel } from "./AuthPanel";
 import { SupabaseClient } from "@supabase/supabase-js";
 import { cn } from "@/lib/utils";
-import { Profile, SupabaseConfig } from "../lib/types";
+import { api } from "../lib/api";
+import { Profile, SupabaseConfig, WorkspaceMember, WorkspaceRole, WorkspaceSummary } from "../lib/types";
 import { APP_VERSION } from "../lib/migration-check";
 
 interface AccountSettingsPageProps {
@@ -41,7 +47,7 @@ interface AccountSettingsPageProps {
     onResetSetup: () => void;
 }
 
-type SettingsTab = "profile" | "security" | "supabase";
+type SettingsTab = "profile" | "security" | "workspace" | "supabase";
 
 export function AccountSettingsPage({
     supabase,
@@ -85,6 +91,7 @@ export function AccountSettingsPage({
     const tabs = [
         { id: "profile", label: "Profile", icon: User },
         { id: "security", label: "Security", icon: ShieldCheck },
+        { id: "workspace", label: "Workspace", icon: Users },
         { id: "supabase", label: "Supabase", icon: Database },
     ];
 
@@ -159,6 +166,9 @@ export function AccountSettingsPage({
                     )}
                     {activeTab === "security" && (
                         <SecuritySection supabase={supabase} />
+                    )}
+                    {activeTab === "workspace" && (
+                        <WorkspaceSection supabase={supabase} sessionStatus={sessionStatus} />
                     )}
                     {activeTab === "supabase" && (
                         <SupabaseSection
@@ -471,6 +481,466 @@ function SecuritySection({ supabase }: { supabase: SupabaseClient | null }) {
                 </Button>
             </CardFooter>
         </Card>
+    );
+}
+
+function WorkspaceSection({
+    supabase,
+    sessionStatus
+}: {
+    supabase: SupabaseClient | null;
+    sessionStatus: "unknown" | "authenticated" | "anonymous" | "error";
+}) {
+    const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+    const [members, setMembers] = useState<WorkspaceMember[]>([]);
+    const [activeWorkspaceId, setActiveWorkspaceId] = useState("");
+    const [loadingWorkspaces, setLoadingWorkspaces] = useState(false);
+    const [loadingMembers, setLoadingMembers] = useState(false);
+    const [isInviting, setIsInviting] = useState(false);
+    const [busyMemberId, setBusyMemberId] = useState<string | null>(null);
+    const [pendingRemovalMember, setPendingRemovalMember] = useState<WorkspaceMember | null>(null);
+    const [inviteEmail, setInviteEmail] = useState("");
+    const [inviteRole, setInviteRole] = useState<"member" | "admin">("member");
+    const [status, setStatus] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+
+    const activeWorkspace = workspaces.find((workspace) => workspace.id === activeWorkspaceId) ?? null;
+    const currentRole = activeWorkspace?.role ?? null;
+    const canManageMembers = currentRole === "owner" || currentRole === "admin";
+    const canManageAdmins = currentRole === "owner";
+
+    useEffect(() => {
+        if (!canManageAdmins && inviteRole === "admin") {
+            setInviteRole("member");
+        }
+    }, [canManageAdmins, inviteRole]);
+
+    function roleLabel(role: WorkspaceRole): string {
+        if (role === "owner") return "Owner";
+        if (role === "admin") return "Admin";
+        return "Member";
+    }
+
+    function memberDisplayName(member: WorkspaceMember): string {
+        const full = `${member.first_name ?? ""} ${member.last_name ?? ""}`.trim();
+        return full.length > 0 ? full : member.email ?? "Unknown User";
+    }
+
+    function memberInitial(member: WorkspaceMember): string {
+        const seed = memberDisplayName(member).trim();
+        return seed.length > 0 ? seed[0]?.toUpperCase() ?? "?" : "?";
+    }
+
+    async function fetchMembers(workspaceId: string, token: string | null) {
+        setLoadingMembers(true);
+        const response = await api.getWorkspaceMembers(workspaceId, token);
+        if (response.data?.success) {
+            setMembers(response.data.members || []);
+            setStatus(null);
+        } else {
+            setMembers([]);
+            setStatus({
+                type: "error",
+                msg: typeof response.error === "string" ? response.error : response.error?.message || "Failed to load workspace members."
+            });
+        }
+        setLoadingMembers(false);
+    }
+
+    async function fetchWorkspaceState() {
+        if (!supabase) return;
+        setLoadingWorkspaces(true);
+        setStatus(null);
+
+        const { data: { session } } = await supabase.auth.getSession();
+        const token = session?.access_token ?? null;
+        const response = await api.getWorkspaces(token);
+
+        if (!response.data?.success) {
+            setWorkspaces([]);
+            setMembers([]);
+            setActiveWorkspaceId("");
+            setLoadingWorkspaces(false);
+            setStatus({
+                type: "error",
+                msg: typeof response.error === "string" ? response.error : response.error?.message || "Failed to load workspaces."
+            });
+            return;
+        }
+
+        const items = response.data.workspaces || [];
+        setWorkspaces(items);
+
+        if (items.length === 0) {
+            api.setActiveWorkspaceId(null);
+            setActiveWorkspaceId("");
+            setMembers([]);
+            setLoadingWorkspaces(false);
+            return;
+        }
+
+        const persisted = api.getActiveWorkspaceId();
+        const hasPersisted = persisted ? items.some((workspace) => workspace.id === persisted) : false;
+        const serverActive = response.data.activeWorkspaceId;
+        const hasServerActive = serverActive ? items.some((workspace) => workspace.id === serverActive) : false;
+        const nextWorkspaceId = (hasPersisted ? persisted : hasServerActive ? serverActive : items[0]?.id) ?? "";
+
+        setActiveWorkspaceId(nextWorkspaceId);
+        api.setActiveWorkspaceId(nextWorkspaceId || null);
+
+        if (nextWorkspaceId) {
+            await fetchMembers(nextWorkspaceId, token);
+        } else {
+            setMembers([]);
+        }
+
+        setLoadingWorkspaces(false);
+    }
+
+    useEffect(() => {
+        if (sessionStatus === "authenticated" && supabase) {
+            void fetchWorkspaceState();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sessionStatus, supabase]);
+
+    const handleSwitchWorkspace = async (workspaceId: string) => {
+        if (!supabase) return;
+        setActiveWorkspaceId(workspaceId);
+        api.setActiveWorkspaceId(workspaceId);
+        setStatus(null);
+        const { data: { session } } = await supabase.auth.getSession();
+        await fetchMembers(workspaceId, session?.access_token ?? null);
+    };
+
+    const handleInvite = async () => {
+        if (!supabase || !activeWorkspaceId || !canManageMembers) return;
+        const email = inviteEmail.trim();
+        if (!email) {
+            setStatus({ type: "error", msg: "Invite email is required." });
+            return;
+        }
+
+        setIsInviting(true);
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await api.inviteWorkspaceMember(
+            activeWorkspaceId,
+            { email, role: inviteRole },
+            session?.access_token ?? null
+        );
+        if (response.data?.success) {
+            setInviteEmail("");
+            setStatus({
+                type: "success",
+                msg: response.data.invitation_email_sent
+                    ? `User created and invite email sent to ${email}.`
+                    : `Added ${email} to workspace.`
+            });
+            await fetchMembers(activeWorkspaceId, session?.access_token ?? null);
+        } else {
+            setStatus({
+                type: "error",
+                msg: typeof response.error === "string" ? response.error : response.error?.message || "Failed to invite member."
+            });
+        }
+        setIsInviting(false);
+    };
+
+    const handleUpdateRole = async (member: WorkspaceMember, role: "member" | "admin") => {
+        if (!supabase || !activeWorkspaceId) return;
+        setBusyMemberId(member.user_id);
+        setStatus(null);
+
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await api.updateWorkspaceMemberRole(
+            activeWorkspaceId,
+            member.user_id,
+            role,
+            session?.access_token ?? null
+        );
+        if (response.data?.success) {
+            setStatus({ type: "success", msg: `Updated ${memberDisplayName(member)} role to ${roleLabel(role)}.` });
+            await fetchMembers(activeWorkspaceId, session?.access_token ?? null);
+        } else {
+            setStatus({
+                type: "error",
+                msg: typeof response.error === "string" ? response.error : response.error?.message || "Failed to update member role."
+            });
+        }
+        setBusyMemberId(null);
+    };
+
+    const handleRemoveMember = async () => {
+        if (!supabase || !activeWorkspaceId || !pendingRemovalMember) return;
+        const member = pendingRemovalMember;
+        const label = memberDisplayName(member);
+
+        setBusyMemberId(member.user_id);
+        setStatus(null);
+
+        const { data: { session } } = await supabase.auth.getSession();
+        const response = await api.removeWorkspaceMember(
+            activeWorkspaceId,
+            member.user_id,
+            session?.access_token ?? null
+        );
+        if (response.data?.success) {
+            setStatus({ type: "success", msg: `${label} was removed from workspace.` });
+            setPendingRemovalMember(null);
+            await fetchMembers(activeWorkspaceId, session?.access_token ?? null);
+        } else {
+            setStatus({
+                type: "error",
+                msg: typeof response.error === "string" ? response.error : response.error?.message || "Failed to remove member."
+            });
+        }
+
+        setBusyMemberId(null);
+    };
+
+    const isRemovingPendingMember = pendingRemovalMember ? busyMemberId === pendingRemovalMember.user_id : false;
+    const pendingRemovalLabel = pendingRemovalMember ? memberDisplayName(pendingRemovalMember) : "this member";
+
+    const closeRemoveDialog = () => {
+        if (isRemovingPendingMember) return;
+        setPendingRemovalMember(null);
+    };
+
+    if (sessionStatus !== "authenticated") {
+        return (
+            <Card className="border-border/40 shadow-xl shadow-black/5 bg-card/50 backdrop-blur-sm overflow-hidden">
+                <CardHeader className="p-8 border-b bg-muted/20">
+                    <CardTitle className="text-2xl font-black">Workspace & Team</CardTitle>
+                    <CardDescription className="text-base">Sign in to manage workspace members.</CardDescription>
+                </CardHeader>
+            </Card>
+        );
+    }
+
+    return (
+        <div className="space-y-8 animate-in fade-in duration-700">
+            <Card className="border-border/40 shadow-xl shadow-black/5 bg-card/50 backdrop-blur-sm overflow-hidden">
+                <CardHeader className="p-8 border-b bg-muted/20">
+                    <CardTitle className="text-2xl font-black">Workspace & Team</CardTitle>
+                    <CardDescription className="text-base">Switch your active workspace and manage members.</CardDescription>
+                </CardHeader>
+                <CardContent className="p-8 space-y-6">
+                    {status && (
+                        <Alert variant={status.type === "error" ? "destructive" : "default"} className={cn("animate-in fade-in slide-in-from-top-2 duration-300", status.type === "success" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "")}>
+                            {status.type === "success" ? <CheckCircle2 className="h-4 w-4" /> : <ShieldAlert className="h-4 w-4" />}
+                            <AlertDescription className="text-sm font-bold">{status.msg}</AlertDescription>
+                        </Alert>
+                    )}
+
+                    {loadingWorkspaces ? (
+                        <div className="py-16 flex items-center justify-center">
+                            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                        </div>
+                    ) : workspaces.length === 0 ? (
+                        <Alert className="bg-amber-500/5 border-amber-500/20 text-amber-600 dark:text-amber-400 p-6 rounded-2xl shadow-sm">
+                            <AlertCircle className="w-5 h-5" />
+                            <AlertTitle className="font-bold mb-1">No Active Workspace</AlertTitle>
+                            <AlertDescription className="text-sm opacity-90">No active workspace memberships were found for this account.</AlertDescription>
+                        </Alert>
+                    ) : (
+                        <div className="space-y-8">
+                            <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6">
+                                <Card className="border-border/40 bg-background/40">
+                                    <CardHeader className="pb-4">
+                                        <CardTitle className="text-base font-black">Active Workspace</CardTitle>
+                                        <CardDescription>This workspace is used for dashboard, funnel, chat, and policy requests.</CardDescription>
+                                    </CardHeader>
+                                    <CardContent className="space-y-4">
+                                        <div className="space-y-2">
+                                            <Label htmlFor="workspace-select" className="text-xs font-black uppercase tracking-widest text-muted-foreground ml-1">Workspace</Label>
+                                            <select
+                                                id="workspace-select"
+                                                value={activeWorkspaceId}
+                                                onChange={(event) => { void handleSwitchWorkspace(event.target.value); }}
+                                                className="h-12 w-full rounded-xl border border-border/40 bg-background/60 px-4 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
+                                            >
+                                                {workspaces.map((workspace) => (
+                                                    <option key={workspace.id} value={workspace.id}>
+                                                        {workspace.name}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div className="flex items-center justify-between rounded-xl border border-border/40 bg-muted/30 px-4 py-3">
+                                            <div className="text-sm">
+                                                <p className="font-bold">Your role</p>
+                                                <p className="text-muted-foreground text-xs">Permission level in this workspace</p>
+                                            </div>
+                                            <Badge variant={currentRole === "owner" ? "default" : currentRole === "admin" ? "secondary" : "outline"} className="text-[10px] font-black uppercase tracking-widest">
+                                                {currentRole ? roleLabel(currentRole) : "Unknown"}
+                                            </Badge>
+                                        </div>
+                                    </CardContent>
+                                </Card>
+
+                                <Card className="border-border/40 bg-background/40">
+                                    <CardHeader className="pb-4">
+                                        <CardTitle className="text-base font-black flex items-center gap-2">
+                                            <UserPlus className="w-4 h-4" />
+                                            Invite Member
+                                        </CardTitle>
+                                        <CardDescription>Add an existing Folio user by email.</CardDescription>
+                                    </CardHeader>
+                                    <CardContent className="space-y-3">
+                                        {!canManageMembers ? (
+                                            <p className="text-sm text-muted-foreground">Only workspace admins can invite members.</p>
+                                        ) : (
+                                            <>
+                                                <Input
+                                                    placeholder="member@company.com"
+                                                    value={inviteEmail}
+                                                    onChange={(event) => setInviteEmail(event.target.value)}
+                                                    className="h-11 rounded-xl bg-background/50 border-border/40"
+                                                />
+                                                <div className="flex items-center gap-3">
+                                                    <select
+                                                        value={inviteRole}
+                                                        onChange={(event) => setInviteRole(event.target.value === "admin" ? "admin" : "member")}
+                                                        className="h-11 flex-1 rounded-xl border border-border/40 bg-background/60 px-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary"
+                                                    >
+                                                        <option value="member">Member</option>
+                                                        {canManageAdmins && <option value="admin">Admin</option>}
+                                                    </select>
+                                                    <Button
+                                                        className="h-11 px-5 rounded-xl font-bold"
+                                                        disabled={isInviting || inviteEmail.trim().length === 0}
+                                                        onClick={() => { void handleInvite(); }}
+                                                    >
+                                                        {isInviting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <UserPlus className="w-4 h-4 mr-2" />}
+                                                        Invite
+                                                    </Button>
+                                                </div>
+                                                <p className="text-[11px] text-muted-foreground">If this email is new, Folio will create the account and send an invite email.</p>
+                                            </>
+                                        )}
+                                    </CardContent>
+                                </Card>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="text-sm font-black uppercase tracking-widest text-muted-foreground">Members ({members.length})</h4>
+                                    <Button variant="outline" className="h-9 rounded-xl font-bold" onClick={() => { void fetchWorkspaceState(); }}>
+                                        <RefreshCcw className="w-4 h-4 mr-2" />
+                                        Refresh
+                                    </Button>
+                                </div>
+
+                                {loadingMembers ? (
+                                    <div className="py-12 flex items-center justify-center rounded-2xl border border-border/40 bg-muted/20">
+                                        <Loader2 className="w-7 h-7 animate-spin text-primary" />
+                                    </div>
+                                ) : (
+                                    <div className="space-y-3">
+                                        {members.map((member) => {
+                                            const canEditRole = canManageMembers
+                                                && member.role !== "owner"
+                                                && (canManageAdmins || member.role === "member");
+                                            const canRemove = canManageMembers
+                                                && member.role !== "owner"
+                                                && (canManageAdmins || member.role === "member");
+                                            const isBusy = busyMemberId === member.user_id;
+
+                                            return (
+                                                <div key={member.user_id} className="rounded-2xl border border-border/40 bg-background/50 p-4 flex flex-col md:flex-row md:items-center gap-4">
+                                                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                                                        <div className="w-10 h-10 rounded-full bg-primary/10 text-primary font-black flex items-center justify-center shrink-0">
+                                                            {memberInitial(member)}
+                                                        </div>
+                                                        <div className="min-w-0">
+                                                            <p className="font-bold truncate">
+                                                                {memberDisplayName(member)}
+                                                                {member.is_current_user && <span className="text-muted-foreground ml-2 text-xs">(You)</span>}
+                                                            </p>
+                                                            <p className="text-sm text-muted-foreground truncate">{member.email ?? "No email"}</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="flex items-center gap-3 md:justify-end">
+                                                        {member.role === "owner" && (
+                                                            <Badge className="text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
+                                                                <Crown className="w-3 h-3" />
+                                                                Owner
+                                                            </Badge>
+                                                        )}
+
+                                                        {member.role !== "owner" && canEditRole ? (
+                                                            <select
+                                                                value={member.role}
+                                                                disabled={isBusy}
+                                                                onChange={(event) => {
+                                                                    const nextRole = event.target.value === "admin" ? "admin" : "member";
+                                                                    void handleUpdateRole(member, nextRole);
+                                                                }}
+                                                                className="h-10 rounded-xl border border-border/40 bg-background/60 px-3 text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50"
+                                                            >
+                                                                <option value="member">Member</option>
+                                                                {canManageAdmins && <option value="admin">Admin</option>}
+                                                            </select>
+                                                        ) : member.role !== "owner" ? (
+                                                            <Badge variant={member.role === "admin" ? "secondary" : "outline"} className="text-[10px] font-black uppercase tracking-widest">
+                                                                {roleLabel(member.role)}
+                                                            </Badge>
+                                                        ) : null}
+
+                                                        {canRemove && (
+                                                            <Button
+                                                                variant="ghost"
+                                                                size="icon"
+                                                                className="h-10 w-10 rounded-xl text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                                                disabled={isBusy}
+                                                                onClick={() => { setPendingRemovalMember(member); }}
+                                                                title="Remove member"
+                                                            >
+                                                                {isBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                                                            </Button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            <Dialog open={Boolean(pendingRemovalMember)} onOpenChange={(open) => { if (!open) closeRemoveDialog(); }}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle className="text-lg font-black">Remove Member</DialogTitle>
+                        <DialogDescription className="leading-relaxed">
+                            Remove <span className="font-semibold text-foreground">{pendingRemovalLabel}</span> from this workspace?
+                            They will lose access to workspace policies, funnel data, dashboard metrics, and workspace-scoped retrieval.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter className="gap-2">
+                        <Button variant="outline" onClick={closeRemoveDialog} disabled={isRemovingPendingMember}>
+                            Cancel
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={() => { void handleRemoveMember(); }}
+                            disabled={isRemovingPendingMember}
+                        >
+                            {isRemovingPendingMember ? (
+                                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                            ) : (
+                                <Trash2 className="w-4 h-4 mr-2" />
+                            )}
+                            Remove
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        </div>
     );
 }
 

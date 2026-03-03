@@ -2,7 +2,7 @@
 -- Each row is immutable once referenced by an ingestion record,
 -- enabling full auditability of which prompt config produced each extraction.
 
-CREATE TABLE public.baseline_configs (
+CREATE TABLE IF NOT EXISTS public.baseline_configs (
   id         uuid        NOT NULL DEFAULT gen_random_uuid(),
   user_id    uuid        NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   version    integer     NOT NULL,
@@ -16,12 +16,13 @@ CREATE TABLE public.baseline_configs (
 );
 
 -- Fast lookup of a user's active config
-CREATE INDEX idx_baseline_configs_user_active
+CREATE INDEX IF NOT EXISTS idx_baseline_configs_user_active
   ON public.baseline_configs (user_id, is_active);
 
 -- RLS
 ALTER TABLE public.baseline_configs ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users manage own baseline configs" ON public.baseline_configs;
 CREATE POLICY "Users manage own baseline configs"
   ON public.baseline_configs FOR ALL
   USING (auth.uid() = user_id)
@@ -31,5 +32,5 @@ CREATE POLICY "Users manage own baseline configs"
 -- NULL means the ingestion was processed before this feature existed
 -- or that the default built-in fields were used.
 ALTER TABLE public.ingestions
-  ADD COLUMN baseline_config_id uuid NULL
+  ADD COLUMN IF NOT EXISTS baseline_config_id uuid NULL
     REFERENCES public.baseline_configs(id) ON DELETE SET NULL;

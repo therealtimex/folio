@@ -14,6 +14,7 @@ import settingsRoutes from "./settings.js";
 import rulesRoutes from "./rules.js";
 import chatRoutes from "./chat.js";
 import statsRoutes from "./stats.js";
+import workspaceRoutes from "./workspaces.js";
 
 const router = Router();
 
@@ -31,5 +32,6 @@ router.use("/settings", settingsRoutes);
 router.use("/rules", rulesRoutes);
 router.use("/chat", chatRoutes);
 router.use("/stats", statsRoutes);
+router.use("/workspaces", workspaceRoutes);
 
 export default router;

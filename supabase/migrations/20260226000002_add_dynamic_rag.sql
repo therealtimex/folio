@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
 -- Enable RLS
 ALTER TABLE document_chunks ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can manage their own document chunks" ON document_chunks;
 CREATE POLICY "Users can manage their own document chunks"
     ON document_chunks
     FOR ALL

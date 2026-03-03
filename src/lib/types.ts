@@ -131,3 +131,29 @@ export interface Profile {
   created_at: string;
   updated_at: string;
 }
+
+export type WorkspaceRole = "owner" | "admin" | "member";
+export type WorkspaceMembershipStatus = "active" | "invited" | "disabled";
+
+export interface WorkspaceSummary {
+  id: string;
+  name: string;
+  owner_user_id: string;
+  created_at: string;
+  updated_at: string;
+  role: WorkspaceRole;
+  membership_status: WorkspaceMembershipStatus;
+  membership_created_at: string;
+}
+
+export interface WorkspaceMember {
+  user_id: string;
+  role: WorkspaceRole;
+  status: WorkspaceMembershipStatus;
+  joined_at: string;
+  first_name: string | null;
+  last_name: string | null;
+  email: string | null;
+  avatar_url: string | null;
+  is_current_user: boolean;
+}

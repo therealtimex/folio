@@ -18,18 +18,22 @@ CREATE TABLE IF NOT EXISTS policies (
 ALTER TABLE policies ENABLE ROW LEVEL SECURITY;
 
 -- Users can only manage their own policies
+DROP POLICY IF EXISTS "Users can read own policies" ON policies;
 CREATE POLICY "Users can read own policies"
     ON policies FOR SELECT
     USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert own policies" ON policies;
 CREATE POLICY "Users can insert own policies"
     ON policies FOR INSERT
     WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update own policies" ON policies;
 CREATE POLICY "Users can update own policies"
     ON policies FOR UPDATE
     USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can delete own policies" ON policies;
 CREATE POLICY "Users can delete own policies"
     ON policies FOR DELETE
     USING (auth.uid() = user_id);
@@ -43,6 +47,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS policies_updated_at ON policies;
 CREATE TRIGGER policies_updated_at
     BEFORE UPDATE ON policies
     FOR EACH ROW EXECUTE FUNCTION update_policies_updated_at();

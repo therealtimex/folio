@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS processing_events (
 ALTER TABLE processing_events ENABLE ROW LEVEL SECURITY;
 
 -- RLS Policy: Users can access their own processing events
+DROP POLICY IF EXISTS "Users can access their own processing events" ON processing_events;
 CREATE POLICY "Users can access their own processing events" ON processing_events
     FOR ALL USING (auth.uid() = user_id);
 

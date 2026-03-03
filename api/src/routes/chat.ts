@@ -142,7 +142,13 @@ router.post(
         }
 
         try {
-            const aiMessage = await ChatService.handleMessage(normalizedSessionId, req.user.id, trimmedContent, req.supabase);
+            const aiMessage = await ChatService.handleMessage(
+                normalizedSessionId,
+                req.user.id,
+                trimmedContent,
+                req.supabase,
+                req.workspaceId
+            );
             res.json({ success: true, message: aiMessage });
         } catch (error) {
             const message = error instanceof Error ? error.message : "Failed to process message";

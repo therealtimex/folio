@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
     LogIn,
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -34,19 +34,17 @@ interface LoginPageProps {
 export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: LoginPageProps) {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
+    const [otpCode, setOtpCode] = useState("");
     const [firstName, setFirstName] = useState("");
     const [lastName, setLastName] = useState("");
     const [isLoading, setIsLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [showPassword, setShowPassword] = useState(false);
     const [isSignUp, setIsSignUp] = useState(initStatus === "empty");
+    const [authMode, setAuthMode] = useState<"password" | "otp">("password");
+    const [otpSent, setOtpSent] = useState(false);
 
-    useEffect(() => {
-        setIsSignUp(initStatus === "empty");
-    }, [initStatus]);
-
-    async function handleLogin(e: React.FormEvent) {
-        e.preventDefault();
+    async function handlePasswordLogin() {
         setIsLoading(true);
         setError(null);
         try {
@@ -61,8 +59,7 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
         }
     }
 
-    async function handleEnrollAdmin(e: React.FormEvent) {
-        e.preventDefault();
+    async function handleEnrollAdmin() {
         setIsLoading(true);
         setError(null);
         try {
@@ -88,6 +85,63 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
         } finally {
             setIsLoading(false);
         }
+    }
+
+    async function handleSendOtp() {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const { error: otpError } = await supabase.auth.signInWithOtp({
+                email,
+                options: {
+                    shouldCreateUser: false,
+                }
+            });
+            if (otpError) throw otpError;
+            setOtpSent(true);
+            setOtpCode("");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } catch (err: any) {
+            setError(err.message || "Failed to send email code.");
+        } finally {
+            setIsLoading(false);
+        }
+    }
+
+    async function handleVerifyOtp() {
+        setIsLoading(true);
+        setError(null);
+        try {
+            const { error: verifyError } = await supabase.auth.verifyOtp({
+                email,
+                token: otpCode,
+                type: "email",
+            });
+            if (verifyError) throw verifyError;
+            onSuccess();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } catch (err: any) {
+            setError(err.message || "Invalid code.");
+        } finally {
+            setIsLoading(false);
+        }
+    }
+
+    async function handleSubmit(e: React.FormEvent) {
+        e.preventDefault();
+        if (isSignUp) {
+            await handleEnrollAdmin();
+            return;
+        }
+        if (authMode === "password") {
+            await handlePasswordLogin();
+            return;
+        }
+        if (!otpSent) {
+            await handleSendOtp();
+            return;
+        }
+        await handleVerifyOtp();
     }
 
     return (
@@ -131,7 +185,7 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
                         </div>
                     </div>
 
-                    <form onSubmit={isSignUp ? handleEnrollAdmin : handleLogin} className="space-y-6">
+                    <form onSubmit={handleSubmit} className="space-y-6">
                         <AnimatePresence mode="wait">
                             {isSignUp && (
                                 <motion.div
@@ -172,34 +226,60 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
                                     type="email"
                                     placeholder="admin@realtimex.ai"
                                     value={email}
-                                    onChange={(e) => setEmail(e.target.value)}
+                                    onChange={(e) => {
+                                        setEmail(e.target.value);
+                                        if (!isSignUp && authMode === "otp") {
+                                            setOtpSent(false);
+                                            setOtpCode("");
+                                        }
+                                    }}
                                     required
                                     className="pl-12 h-14 bg-background/50 border-border/40 rounded-2xl focus:ring-primary/20 font-medium"
                                 />
                             </div>
                         </div>
 
-                        <div className="space-y-2">
-                            <Label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">Security Key</Label>
-                            <div className="relative group">
-                                <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-muted-foreground/40 group-focus-within:text-primary transition-colors" />
-                                <Input
-                                    type={showPassword ? "text" : "password"}
-                                    placeholder="••••••••"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    required
-                                    className="pl-12 pr-12 h-14 bg-background/50 border-border/40 rounded-2xl focus:ring-primary/20 font-medium"
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => setShowPassword(!showPassword)}
-                                    className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-primary transition-colors focus:outline-none"
-                                >
-                                    {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                                </button>
+                        {(isSignUp || authMode === "password") && (
+                            <div className="space-y-2">
+                                <Label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">Security Key</Label>
+                                <div className="relative group">
+                                    <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-muted-foreground/40 group-focus-within:text-primary transition-colors" />
+                                    <Input
+                                        type={showPassword ? "text" : "password"}
+                                        placeholder="••••••••"
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        required={isSignUp || authMode === "password"}
+                                        className="pl-12 pr-12 h-14 bg-background/50 border-border/40 rounded-2xl focus:ring-primary/20 font-medium"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="absolute right-4 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-primary transition-colors focus:outline-none"
+                                    >
+                                        {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                                    </button>
+                                </div>
                             </div>
-                        </div>
+                        )}
+
+                        {!isSignUp && authMode === "otp" && otpSent && (
+                            <div className="space-y-2">
+                                <Label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">Email Code (OTP)</Label>
+                                <div className="relative group">
+                                    <Key className="absolute left-4 top-1/2 -translate-y-1/2 w-4.5 h-4.5 text-muted-foreground/40 group-focus-within:text-primary transition-colors" />
+                                    <Input
+                                        type="text"
+                                        inputMode="numeric"
+                                        placeholder="6-digit code"
+                                        value={otpCode}
+                                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                                        required
+                                        className="pl-12 h-14 bg-background/50 border-border/40 rounded-2xl focus:ring-primary/20 font-medium tracking-[0.3em]"
+                                    />
+                                </div>
+                            </div>
+                        )}
 
                         {error && (
                             <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
@@ -217,16 +297,49 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
                             </motion.div>
                         )}
 
-                        <Button size="lg" className="w-full h-14 rounded-2xl text-base font-black shadow-xl shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all duration-300" disabled={isLoading}>
+                        <Button size="lg" className="w-full h-14 rounded-2xl text-base font-black shadow-xl shadow-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all duration-300" disabled={isLoading || !email || (isSignUp && !password) || (!isSignUp && authMode === "password" && !password) || (!isSignUp && authMode === "otp" && otpSent && otpCode.length < 6)}>
                             {isLoading ? (
                                 <Loader2 className="w-5 h-5 animate-spin" />
                             ) : (
                                 <>
                                     {isSignUp ? <ShieldCheck className="w-5 h-5 mr-3" /> : <LogIn className="w-5 h-5 mr-3" />}
-                                    {isSignUp ? "Engage Administrator" : "Log In to Dashboard"}
+                                    {isSignUp
+                                        ? "Engage Administrator"
+                                        : authMode === "password"
+                                            ? "Log In to Dashboard"
+                                            : otpSent
+                                                ? "Verify Code & Login"
+                                                : "Send Email Code"}
                                 </>
                             )}
                         </Button>
+
+                        {!isSignUp && (
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setError(null);
+                                    setOtpSent(false);
+                                    setOtpCode("");
+                                    setAuthMode(authMode === "password" ? "otp" : "password");
+                                }}
+                                className="w-full text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground hover:text-primary transition-colors flex items-center justify-center gap-2 group"
+                            >
+                                {authMode === "password" ? "Use Login with Email Code (OTP)" : "Use Password Login"}
+                                <ArrowRight className="w-3 h-3 group-hover:translate-x-1 transition-transform" />
+                            </button>
+                        )}
+
+                        {!isSignUp && authMode === "otp" && otpSent && (
+                            <button
+                                type="button"
+                                onClick={() => { void handleSendOtp(); }}
+                                className="w-full text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground hover:text-primary transition-colors"
+                                disabled={isLoading}
+                            >
+                                Resend Email Code
+                            </button>
+                        )}
                     </form>
 
                     <div className="pt-6 border-t border-border/10">
@@ -234,6 +347,9 @@ export function LoginPage({ supabase, initStatus, onSuccess, onResetConfigs }: L
                             type="button"
                             onClick={() => {
                                 setError(null);
+                                setOtpSent(false);
+                                setOtpCode("");
+                                setAuthMode("password");
                                 setIsSignUp(!isSignUp);
                             }}
                             className="w-full text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground hover:text-primary transition-colors flex items-center justify-center gap-2 group"

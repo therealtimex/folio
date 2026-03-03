@@ -23,6 +23,8 @@ export interface DocumentObject {
     ingestionId: string;
     /** ID of the user */
     userId: string;
+    /** Active workspace scope for this ingestion */
+    workspaceId?: string;
     /** Authenticated Supabase client used for RLS-safe event writes */
     supabase?: SupabaseClient;
 }
@@ -942,7 +944,7 @@ export class PolicyEngine {
      */
     static async process(doc: DocumentObject, settings: { llm_provider?: string; llm_model?: string } = {}, baselineEntities: Record<string, unknown> = {}): Promise<ProcessingResult> {
         logger.info(`Processing document: ${doc.filePath}`);
-        const policies = await PolicyLoader.load();
+        const policies = await PolicyLoader.load(false, doc.supabase, doc.workspaceId);
         const globalTrace: TraceLog[] = [{ timestamp: new Date().toISOString(), step: "Loaded policies", details: { count: policies.length } }];
         Actuator.logEvent(doc.ingestionId, doc.userId, "info", "Triage", { action: "Loaded policies", count: policies.length }, doc.supabase);
 
@@ -1034,6 +1036,7 @@ export class PolicyEngine {
                 const learned = await PolicyLearningService.resolveLearnedCandidate({
                     supabase: doc.supabase,
                     userId: doc.userId,
+                    workspaceId: doc.workspaceId,
                     policyIds: policies.map((policy) => policy.metadata.id),
                     filePath: doc.filePath,
                     baselineEntities,

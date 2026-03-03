@@ -22,10 +22,14 @@ router.get(
             res.status(401).json({ success: false, error: "Authentication required" });
             return;
         }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
         const page = Math.max(1, parseInt(req.query["page"] as string) || 1);
         const pageSize = Math.min(100, Math.max(1, parseInt(req.query["pageSize"] as string) || 20));
         const query = (req.query["q"] as string | undefined)?.trim() || undefined;
-        const { ingestions, total } = await IngestionService.list(req.supabase, req.user.id, { page, pageSize, query });
+        const { ingestions, total } = await IngestionService.list(req.supabase, req.workspaceId, { page, pageSize, query });
         res.json({ success: true, ingestions, total, page, pageSize });
     })
 );
@@ -38,7 +42,11 @@ router.get(
             res.status(401).json({ success: false, error: "Authentication required" });
             return;
         }
-        const ingestion = await IngestionService.get(req.params["id"] as string, req.supabase, req.user.id);
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
+        const ingestion = await IngestionService.get(req.params["id"] as string, req.supabase, req.workspaceId);
         if (!ingestion) {
             res.status(404).json({ success: false, error: "Not found" });
             return;
@@ -54,6 +62,10 @@ router.post(
     asyncHandler(async (req, res) => {
         if (!req.supabase || !req.user) {
             res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
             return;
         }
         const file = req.file;
@@ -90,6 +102,7 @@ router.post(
         const ingestion = await IngestionService.ingest({
             supabase: req.supabase,
             userId: req.user.id,
+            workspaceId: req.workspaceId,
             filename: file.originalname,
             mimeType: file.mimetype,
             fileSize: file.size,
@@ -111,7 +124,11 @@ router.post(
             res.status(401).json({ success: false, error: "Authentication required" });
             return;
         }
-        const matched = await IngestionService.rerun(req.params["id"] as string, req.supabase, req.user.id);
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
+        const matched = await IngestionService.rerun(req.params["id"] as string, req.supabase, req.user.id, req.workspaceId);
         res.json({ success: true, matched });
     })
 );
@@ -122,6 +139,10 @@ router.post(
     asyncHandler(async (req, res) => {
         if (!req.supabase || !req.user) {
             res.status(401).json({ success: false, error: "Authentication required" });
+            return;
+        }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
             return;
         }
 
@@ -140,6 +161,7 @@ router.post(
                 policyId,
                 req.supabase,
                 req.user.id,
+                req.workspaceId,
                 {
                     learn,
                     rerun,
@@ -170,6 +192,10 @@ router.post(
             res.status(401).json({ success: false, error: "Authentication required" });
             return;
         }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
 
         const policyId = typeof req.body?.policy_id === "string" ? req.body.policy_id.trim() : "";
         if (!policyId) {
@@ -183,6 +209,7 @@ router.post(
                 policyId,
                 req.supabase,
                 req.user.id,
+                req.workspaceId,
                 {
                     provider: typeof req.body?.provider === "string" ? req.body.provider : undefined,
                     model: typeof req.body?.model === "string" ? req.body.model : undefined,
@@ -212,6 +239,10 @@ router.post(
             res.status(401).json({ success: false, error: "Authentication required" });
             return;
         }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
         const { data: settingsRow } = await req.supabase
             .from("user_settings")
             .select("llm_provider, llm_model, ingestion_llm_provider, ingestion_llm_model")
@@ -224,6 +255,7 @@ router.post(
             req.params["id"] as string,
             req.supabase,
             req.user.id,
+            req.workspaceId,
             llmSettings
         );
         res.json({ success: true, summary });
@@ -238,6 +270,10 @@ router.patch(
             res.status(401).json({ success: false, error: "Authentication required" });
             return;
         }
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
         const tags: unknown = req.body?.tags;
         if (!Array.isArray(tags) || tags.some((t) => typeof t !== "string")) {
             res.status(400).json({ success: false, error: "tags must be an array of strings" });
@@ -248,7 +284,7 @@ router.patch(
             .from("ingestions")
             .update({ tags: normalized })
             .eq("id", req.params["id"] as string)
-            .eq("user_id", req.user.id);
+            .eq("workspace_id", req.workspaceId);
         if (error) {
             res.status(500).json({ success: false, error: error.message });
             return;
@@ -265,7 +301,11 @@ router.delete(
             res.status(401).json({ success: false, error: "Authentication required" });
             return;
         }
-        const deleted = await IngestionService.delete(req.params["id"] as string, req.supabase, req.user.id);
+        if (!req.workspaceId) {
+            res.status(403).json({ success: false, error: "Workspace membership required" });
+            return;
+        }
+        const deleted = await IngestionService.delete(req.params["id"] as string, req.supabase, req.workspaceId);
         if (!deleted) {
             res.status(404).json({ success: false, error: "Not found" });
             return;

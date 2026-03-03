@@ -199,6 +199,7 @@ export class IngestionService {
     private static queueVlmSemanticEmbedding(opts: {
         ingestionId: string;
         userId: string;
+        workspaceId: string;
         filename: string;
         finalStatus: string;
         policyName?: string;
@@ -232,7 +233,8 @@ export class IngestionService {
             opts.userId,
             syntheticText,
             opts.supabase,
-            opts.embedSettings
+            opts.embedSettings,
+            opts.workspaceId
         ).then(() => {
             Actuator.logEvent(opts.ingestionId, opts.userId, "analysis", "RAG Embedding", {
                 action: "Completed synthetic VLM embedding",
@@ -364,6 +366,7 @@ export class IngestionService {
     static async ingest(opts: {
         supabase: SupabaseClient;
         userId: string;
+        workspaceId: string;
         filename: string;
         mimeType?: string;
         fileSize?: number;
@@ -372,14 +375,14 @@ export class IngestionService {
         content: string;
         fileHash?: string;
     }): Promise<Ingestion> {
-        const { supabase, userId, filename, mimeType, fileSize, source = "upload", filePath, content, fileHash } = opts;
+        const { supabase, userId, workspaceId, filename, mimeType, fileSize, source = "upload", filePath, content, fileHash } = opts;
 
         // Duplicate detection — check if this exact file content was already ingested
         if (fileHash) {
             const { data: existing } = await supabase
                 .from("ingestions")
                 .select("id, filename, created_at")
-                .eq("user_id", userId)
+                .eq("workspace_id", workspaceId)
                 .eq("file_hash", fileHash)
                 .eq("status", "matched")
                 .order("created_at", { ascending: true })
@@ -391,6 +394,7 @@ export class IngestionService {
                 const { data: dupIngestion } = await supabase
                     .from("ingestions")
                     .insert({
+                        workspace_id: workspaceId,
                         user_id: userId,
                         source,
                         filename,
@@ -411,6 +415,7 @@ export class IngestionService {
         const { data: ingestion, error: insertErr } = await supabase
             .from("ingestions")
             .insert({
+                workspace_id: workspaceId,
                 user_id: userId,
                 source,
                 filename,
@@ -513,7 +518,7 @@ export class IngestionService {
             try {
                 // 3. Fast Path — fetch all dependencies in parallel
                 const [userPolicies, processingSettingsRow, baselineConfig] = await Promise.all([
-                    PolicyLoader.load(false, supabase),
+                    PolicyLoader.load(false, supabase, workspaceId),
                     supabase.from("user_settings").select("llm_provider, llm_model, ingestion_llm_provider, ingestion_llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
                     BaselineConfigService.getActive(supabase, userId),
                 ]);
@@ -529,12 +534,12 @@ export class IngestionService {
                     attemptContent: string,
                     attemptType: "primary" | "reencoded_image_retry"
                 ): Promise<Ingestion> => {
-                    const doc = { filePath: filePath, text: attemptContent, ingestionId: ingestion.id, userId, supabase };
+                    const doc = { filePath: filePath, text: attemptContent, ingestionId: ingestion.id, userId, workspaceId, supabase };
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
 
                     // Fire and forget Semantic Embedding Storage
-                    RAGService.chunkAndEmbed(ingestion.id, userId, doc.text, supabase, embedSettings).catch(err => {
+                    RAGService.chunkAndEmbed(ingestion.id, userId, doc.text, supabase, embedSettings, workspaceId).catch(err => {
                         logger.error(`RAG embedding failed for ${ingestion.id}`, err);
                     });
 
@@ -614,6 +619,7 @@ export class IngestionService {
                         const embeddingMeta = this.queueVlmSemanticEmbedding({
                             ingestionId: ingestion.id,
                             userId,
+                            workspaceId,
                             filename,
                             finalStatus,
                             policyName,
@@ -788,13 +794,14 @@ export class IngestionService {
         ingestionId: string,
         supabase: SupabaseClient,
         userId: string,
+        workspaceId: string,
         opts: { forcedPolicyId?: string } = {}
     ): Promise<boolean> {
         const { data: ingestion, error } = await supabase
             .from("ingestions")
             .select("*")
             .eq("id", ingestionId)
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .single();
 
         if (error || !ingestion) throw new Error("Ingestion not found");
@@ -889,7 +896,7 @@ export class IngestionService {
 
         if (isFastPath) {
             const [userPolicies, processingSettingsRow, baselineConfig] = await Promise.all([
-                PolicyLoader.load(false, supabase),
+                PolicyLoader.load(false, supabase, workspaceId),
                 supabase.from("user_settings").select("llm_provider, llm_model, ingestion_llm_provider, ingestion_llm_model, embedding_provider, embedding_model").eq("user_id", userId).maybeSingle(),
                 BaselineConfigService.getActive(supabase, userId),
             ]);
@@ -905,12 +912,12 @@ export class IngestionService {
                 attemptContent: string,
                 attemptType: "primary" | "reencoded_image_retry"
             ): Promise<boolean> => {
-                const doc = { filePath, text: attemptContent, ingestionId, userId, supabase };
+                const doc = { filePath, text: attemptContent, ingestionId, userId, workspaceId, supabase };
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 const baselineTrace: Array<{ timestamp: string; step: string; details?: any }> = [];
 
                 // Fire and forget Semantic Embedding Storage for re-runs
-                RAGService.chunkAndEmbed(ingestionId, userId, doc.text, supabase, embedSettings).catch(err => {
+                RAGService.chunkAndEmbed(ingestionId, userId, doc.text, supabase, embedSettings, workspaceId).catch(err => {
                     logger.error(`RAG embedding failed during rerun for ${ingestionId}`, err);
                 });
 
@@ -1008,6 +1015,7 @@ export class IngestionService {
                     const embeddingMeta = this.queueVlmSemanticEmbedding({
                         ingestionId,
                         userId,
+                        workspaceId,
                         filename,
                         finalStatus,
                         policyName,
@@ -1159,6 +1167,7 @@ export class IngestionService {
         policyId: string,
         supabase: SupabaseClient,
         userId: string,
+        workspaceId: string,
         opts: { learn?: boolean; rerun?: boolean; allowSideEffects?: boolean } = {}
     ): Promise<Ingestion> {
         const learn = opts.learn !== false;
@@ -1173,7 +1182,7 @@ export class IngestionService {
             .from("ingestions")
             .select("*")
             .eq("id", ingestionId)
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .single();
         if (ingestionError || !ingestion) {
             throw new Error("Ingestion not found");
@@ -1183,7 +1192,7 @@ export class IngestionService {
             throw new Error("Cannot manually match while ingestion is still processing");
         }
 
-        const policies = await PolicyLoader.load(false, supabase);
+        const policies = await PolicyLoader.load(false, supabase, workspaceId);
         const policy = policies.find((item) => item.metadata.id === normalizedPolicyId);
         if (!policy) {
             throw new Error(`Policy "${normalizedPolicyId}" was not found or is disabled.`);
@@ -1207,8 +1216,8 @@ export class IngestionService {
                 risky_actions: riskyActions,
             }, supabase);
 
-            await this.rerun(ingestionId, supabase, userId, { forcedPolicyId: policy.metadata.id });
-            const refreshed = await this.get(ingestionId, supabase, userId);
+            await this.rerun(ingestionId, supabase, userId, workspaceId, { forcedPolicyId: policy.metadata.id });
+            const refreshed = await this.get(ingestionId, supabase, workspaceId);
             if (!refreshed) {
                 throw new Error("Ingestion not found after rerun.");
             }
@@ -1238,7 +1247,7 @@ export class IngestionService {
                     trace: nextTrace,
                 })
                 .eq("id", ingestionId)
-                .eq("user_id", userId)
+                .eq("workspace_id", workspaceId)
                 .select("*")
                 .single();
 
@@ -1260,6 +1269,7 @@ export class IngestionService {
             await PolicyLearningService.recordManualMatch({
                 supabase,
                 userId,
+                workspaceId,
                 ingestion: effectiveIngestion,
                 policyId: policy.metadata.id,
                 policyName: policy.metadata.name,
@@ -1278,6 +1288,7 @@ export class IngestionService {
         policyId: string,
         supabase: SupabaseClient,
         userId: string,
+        workspaceId: string,
         opts: { provider?: string; model?: string } = {}
     ): Promise<{ policy: FolioPolicy; rationale: string[] }> {
         const normalizedPolicyId = policyId.trim();
@@ -1289,14 +1300,14 @@ export class IngestionService {
             .from("ingestions")
             .select("id,filename,mime_type,status,tags,summary,extracted,trace")
             .eq("id", ingestionId)
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .single();
 
         if (ingestionError || !ingestion) {
             throw new Error("Ingestion not found");
         }
 
-        const policies = await PolicyLoader.load(false, supabase);
+        const policies = await PolicyLoader.load(false, supabase, workspaceId);
         const targetPolicy = policies.find((policy) => policy.metadata.id === normalizedPolicyId);
         if (!targetPolicy) {
             throw new Error(`Policy "${normalizedPolicyId}" was not found or is disabled.`);
@@ -1333,14 +1344,14 @@ export class IngestionService {
     }
 
     /**
-     * List ingestions for a user, newest first.
+     * List ingestions for an active workspace, newest first.
      * Supports server-side pagination and ILIKE search across native text columns
      * (filename, policy_name, summary). Tags are handled client-side via the
      * filter bar; extracted JSONB search requires a tsvector migration (deferred).
      */
     static async list(
         supabase: SupabaseClient,
-        userId: string,
+        workspaceId: string,
         opts: { page?: number; pageSize?: number; query?: string } = {}
     ): Promise<{ ingestions: Ingestion[]; total: number }> {
         const { page = 1, pageSize = 20, query } = opts;
@@ -1350,7 +1361,7 @@ export class IngestionService {
         let q = supabase
             .from("ingestions")
             .select("*", { count: "exact" })
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .order("created_at", { ascending: false });
 
         if (query?.trim()) {
@@ -1374,12 +1385,12 @@ export class IngestionService {
     /**
      * Get a single ingestion by ID.
      */
-    static async get(id: string, supabase: SupabaseClient, userId: string): Promise<Ingestion | null> {
+    static async get(id: string, supabase: SupabaseClient, workspaceId: string): Promise<Ingestion | null> {
         const { data } = await supabase
             .from("ingestions")
             .select("*")
             .eq("id", id)
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .single();
         return data as Ingestion | null;
     }
@@ -1387,12 +1398,12 @@ export class IngestionService {
     /**
      * Delete an ingestion record.
      */
-    static async delete(id: string, supabase: SupabaseClient, userId: string): Promise<boolean> {
+    static async delete(id: string, supabase: SupabaseClient, workspaceId: string): Promise<boolean> {
         const { count, error } = await supabase
             .from("ingestions")
             .delete({ count: "exact" })
             .eq("id", id)
-            .eq("user_id", userId);
+            .eq("workspace_id", workspaceId);
 
         if (error) throw new Error(`Failed to delete ingestion: ${error.message}`);
         return (count ?? 0) > 0;
@@ -1407,13 +1418,14 @@ export class IngestionService {
         id: string,
         supabase: SupabaseClient,
         userId: string,
+        workspaceId: string,
         llmSettings: { llm_provider?: string; llm_model?: string } = {}
     ): Promise<string | null> {
         const { data: ing } = await supabase
             .from("ingestions")
             .select("id, filename, extracted, summary, status")
             .eq("id", id)
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .single();
 
         if (!ing) throw new Error("Ingestion not found");
@@ -1481,7 +1493,7 @@ export class IngestionService {
                 .from("ingestions")
                 .update({ summary })
                 .eq("id", id)
-                .eq("user_id", userId);
+                .eq("workspace_id", workspaceId);
 
             logger.info(`Summary generated and cached for ingestion ${id}`);
             return summary;

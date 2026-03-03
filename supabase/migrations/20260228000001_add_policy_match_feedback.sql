@@ -21,18 +21,22 @@ CREATE INDEX IF NOT EXISTS policy_match_feedback_user_created_idx
 
 ALTER TABLE public.policy_match_feedback ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can read own policy match feedback" ON public.policy_match_feedback;
 CREATE POLICY "Users can read own policy match feedback"
     ON public.policy_match_feedback FOR SELECT
     USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can insert own policy match feedback" ON public.policy_match_feedback;
 CREATE POLICY "Users can insert own policy match feedback"
     ON public.policy_match_feedback FOR INSERT
     WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can update own policy match feedback" ON public.policy_match_feedback;
 CREATE POLICY "Users can update own policy match feedback"
     ON public.policy_match_feedback FOR UPDATE
     USING (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can delete own policy match feedback" ON public.policy_match_feedback;
 CREATE POLICY "Users can delete own policy match feedback"
     ON public.policy_match_feedback FOR DELETE
     USING (auth.uid() = user_id);

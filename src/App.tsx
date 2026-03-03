@@ -273,6 +273,7 @@ export function App() {
 
     return (
       <LoginPage
+        key={`login-${initStatus}`}
         supabase={supabase!}
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         initStatus={initStatus as any}

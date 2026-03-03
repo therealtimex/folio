@@ -63,7 +63,7 @@ export interface FolioPolicy {
 }
 
 // ─── Cache ───────────────────────────────────────────────────────────────────
-// Keyed by user_id so one user's policies never bleed into another's.
+// Keyed by workspace_id so one workspace's policies never bleed into another's.
 
 const _cache = new Map<string, { policies: FolioPolicy[]; loadedAt: number }>();
 const CACHE_TTL_MS = 30_000;
@@ -90,21 +90,27 @@ function rowToPolicy(row: any): FolioPolicy {
 export class PolicyLoader {
 
     /**
-     * Load all policies for the authenticated user from Supabase.
+     * Load all policies for the active workspace from Supabase.
      * Returns [] if no Supabase client is provided (unauthenticated state).
      */
-    static async load(forceRefresh = false, supabase?: SupabaseClient | null): Promise<FolioPolicy[]> {
+    static async load(
+        forceRefresh = false,
+        supabase?: SupabaseClient | null,
+        workspaceId?: string
+    ): Promise<FolioPolicy[]> {
         if (!supabase) {
             logger.info("No Supabase client — policies require authentication");
             return [];
         }
 
-        // Resolve the user ID to scope the cache correctly
-        const { data: { user } } = await supabase.auth.getUser();
-        const userId = user?.id ?? "anonymous";
+        const resolvedWorkspaceId = (workspaceId ?? "").trim();
+        if (!resolvedWorkspaceId) {
+            logger.warn("No workspace context — returning empty policy set");
+            return [];
+        }
 
         const now = Date.now();
-        const cached = _cache.get(userId);
+        const cached = _cache.get(resolvedWorkspaceId);
         if (!forceRefresh && cached && now - cached.loadedAt < CACHE_TTL_MS) {
             return cached.policies;
         }
@@ -113,14 +119,15 @@ export class PolicyLoader {
             const { data, error } = await supabase
                 .from("policies")
                 .select("*")
+                .eq("workspace_id", resolvedWorkspaceId)
                 .eq("enabled", true)
                 .order("priority", { ascending: false });
 
             if (error) throw error;
 
             const policies = (data ?? []).map(rowToPolicy);
-            _cache.set(userId, { policies, loadedAt: Date.now() });
-            logger.info(`Loaded ${policies.length} policies from DB for user ${userId}`);
+            _cache.set(resolvedWorkspaceId, { policies, loadedAt: Date.now() });
+            logger.info(`Loaded ${policies.length} policies from DB for workspace ${resolvedWorkspaceId}`);
             return policies;
         } catch (err) {
             logger.error("Failed to load policies from DB", { err });
@@ -128,9 +135,9 @@ export class PolicyLoader {
         }
     }
 
-    static invalidateCache(userId?: string) {
-        if (userId) {
-            _cache.delete(userId);
+    static invalidateCache(workspaceId?: string) {
+        if (workspaceId) {
+            _cache.delete(workspaceId);
         } else {
             _cache.clear();
         }
@@ -152,12 +159,18 @@ export class PolicyLoader {
      * Save (upsert) a policy to Supabase.
      * Throws if no Supabase client is available.
      */
-    static async save(policy: FolioPolicy, supabase?: SupabaseClient | null, userId?: string): Promise<string> {
-        if (!supabase || !userId) {
+    static async save(
+        policy: FolioPolicy,
+        supabase?: SupabaseClient | null,
+        userId?: string,
+        workspaceId?: string
+    ): Promise<string> {
+        if (!supabase || !userId || !workspaceId) {
             throw new Error("Authentication required to save policies");
         }
 
         const row = {
+            workspace_id: workspaceId,
             user_id: userId,
             policy_id: policy.metadata.id,
             api_version: policy.apiVersion,
@@ -170,11 +183,11 @@ export class PolicyLoader {
 
         const { error } = await supabase
             .from("policies")
-            .upsert(row, { onConflict: "user_id,policy_id" });
+            .upsert(row, { onConflict: "workspace_id,policy_id" });
 
         if (error) throw new Error(`Failed to save policy: ${error.message}`);
 
-        this.invalidateCache();
+        this.invalidateCache(workspaceId);
         logger.info(`Saved policy to DB: ${policy.metadata.id}`);
         return `db:policies/${policy.metadata.id}`;
     }
@@ -186,9 +199,10 @@ export class PolicyLoader {
         policyId: string,
         patch: { enabled?: boolean; name?: string; description?: string; tags?: string[]; priority?: number },
         supabase?: SupabaseClient | null,
-        userId?: string
+        userId?: string,
+        workspaceId?: string
     ): Promise<boolean> {
-        if (!supabase || !userId) {
+        if (!supabase || !userId || !workspaceId) {
             throw new Error("Authentication required to update policies");
         }
 
@@ -196,7 +210,7 @@ export class PolicyLoader {
             .from("policies")
             .select("metadata, priority, enabled")
             .eq("policy_id", policyId)
-            .eq("user_id", userId)
+            .eq("workspace_id", workspaceId)
             .single();
 
         if (fetchErr || !existing) throw new Error("Policy not found");
@@ -217,11 +231,11 @@ export class PolicyLoader {
                 priority: patch.priority ?? existing.priority,
             })
             .eq("policy_id", policyId)
-            .eq("user_id", userId);
+            .eq("workspace_id", workspaceId);
 
         if (error) throw new Error(`Failed to patch policy: ${error.message}`);
 
-        this.invalidateCache();
+        this.invalidateCache(workspaceId);
         logger.info(`Patched policy: ${policyId}`);
         return true;
     }
@@ -230,8 +244,13 @@ export class PolicyLoader {
      * Delete a policy by ID from Supabase.
      * Throws if no Supabase client is available.
      */
-    static async delete(policyId: string, supabase?: SupabaseClient | null, userId?: string): Promise<boolean> {
-        if (!supabase || !userId) {
+    static async delete(
+        policyId: string,
+        supabase?: SupabaseClient | null,
+        userId?: string,
+        workspaceId?: string
+    ): Promise<boolean> {
+        if (!supabase || !userId || !workspaceId) {
             throw new Error("Authentication required to delete policies");
         }
 
@@ -239,11 +258,11 @@ export class PolicyLoader {
             .from("policies")
             .delete({ count: "exact" })
             .eq("policy_id", policyId)
-            .eq("user_id", userId);
+            .eq("workspace_id", workspaceId);
 
         if (error) throw new Error(`Failed to delete policy: ${error.message}`);
 
-        this.invalidateCache();
+        this.invalidateCache(workspaceId);
         return (count ?? 0) > 0;
     }
 }

@@ -74,7 +74,10 @@ export function ChatSidebar({ activeSessionId, onSelectSession, refreshTrigger }
                 ) : sessions.length === 0 ? (
                     <div className="p-8 text-center text-muted-foreground">
                         <MessageSquare size={24} className="mx-auto opacity-20 mb-2" />
-                        <p className="text-xs">No chat history</p>
+                        <p className="text-xs font-medium">No chat history</p>
+                        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground/80">
+                            Conversations are private to your account in this workspace.
+                        </p>
                     </div>
                 ) : (
                     sessions.map(session => (

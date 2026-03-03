@@ -1,9 +1,23 @@
 import { getApiConfig } from "./api-config";
-import type { ApiResponse, ProcessingJob, UserSettings, EmailAccount, Rule, Stats, Profile, BaselineConfig, BaselineField } from "./types";
+import type {
+  ApiResponse,
+  ProcessingJob,
+  UserSettings,
+  EmailAccount,
+  Rule,
+  Stats,
+  Profile,
+  BaselineConfig,
+  BaselineField,
+  WorkspaceMember,
+  WorkspaceRole,
+  WorkspaceSummary,
+} from "./types";
 
 interface ApiOptions extends RequestInit {
   auth?: boolean;
   token?: string | null;
+  workspaceId?: string | null;
 }
 
 export interface ChatSource {
@@ -37,6 +51,8 @@ export interface DashboardStats {
   automationRuns: number;
 }
 
+const ACTIVE_WORKSPACE_STORAGE_KEY = "folio_active_workspace_id";
+
 class HybridApiClient {
   private edgeFunctionsUrl: string;
   private expressApiUrl: string;
@@ -54,12 +70,17 @@ class HybridApiClient {
     endpoint: string,
     options: ApiOptions = {}
   ): Promise<ApiResponse<T>> {
-    const { auth = false, token, ...fetchOptions } = options;
+    const { auth = false, token, workspaceId, ...fetchOptions } = options;
 
     const headers: HeadersInit = {
       "Content-Type": "application/json",
       ...(fetchOptions.headers || {})
     };
+
+    const resolvedWorkspaceId = this.resolveWorkspaceId(workspaceId ?? null);
+    if (resolvedWorkspaceId) {
+      (headers as Record<string, string>)["X-Workspace-Id"] = resolvedWorkspaceId;
+    }
 
     if (auth && token) {
       (headers as Record<string, string>).Authorization = `Bearer ${token}`;
@@ -130,6 +151,98 @@ class HybridApiClient {
       ...options,
       auth: true
     });
+  }
+
+  private resolveWorkspaceId(explicitWorkspaceId: string | null): string | null {
+    const candidate = (explicitWorkspaceId ?? this.getActiveWorkspaceId() ?? "").trim();
+    return candidate.length > 0 ? candidate : null;
+  }
+
+  getActiveWorkspaceId(): string | null {
+    if (typeof window === "undefined") return null;
+    const stored = window.localStorage.getItem(ACTIVE_WORKSPACE_STORAGE_KEY) ?? "";
+    const trimmed = stored.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  setActiveWorkspaceId(workspaceId: string | null) {
+    if (typeof window === "undefined") return;
+    const trimmed = (workspaceId ?? "").trim();
+    if (trimmed) {
+      window.localStorage.setItem(ACTIVE_WORKSPACE_STORAGE_KEY, trimmed);
+    } else {
+      window.localStorage.removeItem(ACTIVE_WORKSPACE_STORAGE_KEY);
+    }
+    window.dispatchEvent(
+      new CustomEvent("folio:workspace-changed", {
+        detail: { workspaceId: trimmed || null }
+      })
+    );
+  }
+
+  getWorkspaces(token?: string | null) {
+    return this.expressRequest<{
+      success: boolean;
+      workspaces: WorkspaceSummary[];
+      activeWorkspaceId: string | null;
+      activeWorkspaceRole: WorkspaceRole | null;
+    }>("/api/workspaces", {
+      method: "GET",
+      auth: Boolean(token),
+      token
+    });
+  }
+
+  getWorkspaceMembers(workspaceId: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; members: WorkspaceMember[] }>(
+      `/api/workspaces/${workspaceId}/members`,
+      {
+        method: "GET",
+        auth: Boolean(token),
+        token
+      }
+    );
+  }
+
+  inviteWorkspaceMember(
+    workspaceId: string,
+    payload: { email: string; role: Exclude<WorkspaceRole, "owner"> },
+    token?: string | null
+  ) {
+    return this.expressRequest<{
+      success: boolean;
+      invitation_email_sent?: boolean;
+    }>(`/api/workspaces/${workspaceId}/members/invite`, {
+      method: "POST",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify(payload)
+    });
+  }
+
+  updateWorkspaceMemberRole(
+    workspaceId: string,
+    userId: string,
+    role: Exclude<WorkspaceRole, "owner">,
+    token?: string | null
+  ) {
+    return this.expressRequest<{ success: boolean }>(`/api/workspaces/${workspaceId}/members/${userId}`, {
+      method: "PATCH",
+      auth: Boolean(token),
+      token,
+      body: JSON.stringify({ role })
+    });
+  }
+
+  removeWorkspaceMember(workspaceId: string, userId: string, token?: string | null) {
+    return this.expressRequest<{ success: boolean; removed: boolean }>(
+      `/api/workspaces/${workspaceId}/members/${userId}`,
+      {
+        method: "DELETE",
+        auth: Boolean(token),
+        token
+      }
+    );
   }
 
   getChatSessions(token?: string | null) {

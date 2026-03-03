@@ -60,18 +60,23 @@ alter table public.integrations enable row level security;
 alter table public.processing_jobs enable row level security;
 alter table public.system_logs enable row level security;
 
+drop policy if exists "profiles own rows" on public.profiles;
 create policy "profiles own rows" on public.profiles
   for all using (auth.uid() = id);
 
+drop policy if exists "user_settings own rows" on public.user_settings;
 create policy "user_settings own rows" on public.user_settings
   for all using (auth.uid() = user_id);
 
+drop policy if exists "integrations own rows" on public.integrations;
 create policy "integrations own rows" on public.integrations
   for all using (auth.uid() = user_id);
 
+drop policy if exists "processing_jobs own rows" on public.processing_jobs;
 create policy "processing_jobs own rows" on public.processing_jobs
   for all using (auth.uid() = user_id);
 
+drop policy if exists "system_logs own rows" on public.system_logs;
 create policy "system_logs own rows" on public.system_logs
   for all using (auth.uid() = user_id);
 

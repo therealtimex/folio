@@ -13,9 +13,18 @@ declare global {
     interface Request {
       user?: User;
       supabase?: SupabaseClient;
+      workspaceId?: string;
+      workspaceRole?: string;
     }
   }
 }
+
+type WorkspaceMembershipRow = {
+  workspace_id: string;
+  role: "owner" | "admin" | "member";
+  status: "active" | "invited" | "disabled";
+  created_at: string;
+};
 
 function resolveSupabaseConfig(req: Request): { url: string; anonKey: string } | null {
   const headerConfig = getSupabaseConfigFromHeaders(req.headers as Record<string, unknown>);
@@ -29,6 +38,64 @@ function resolveSupabaseConfig(req: Request): { url: string; anonKey: string } |
   }
 
   return headerConfig;
+}
+
+function resolvePreferredWorkspaceId(req: Request): string | null {
+  const raw = req.headers["x-workspace-id"];
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  if (Array.isArray(raw) && typeof raw[0] === "string") {
+    const trimmed = raw[0].trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+  return null;
+}
+
+async function resolveWorkspaceContext(
+  req: Request,
+  supabase: SupabaseClient,
+  user: User
+): Promise<{ workspaceId: string; workspaceRole: "owner" | "admin" | "member" } | null> {
+  const preferredWorkspaceId = resolvePreferredWorkspaceId(req);
+  const { data, error } = await supabase
+    .from("workspace_members")
+    .select("workspace_id,role,status,created_at")
+    .eq("user_id", user.id)
+    .eq("status", "active")
+    .order("created_at", { ascending: true });
+
+  if (error) {
+    const errorCode = (error as { code?: string }).code;
+    // Backward compatibility: allow projects that haven't migrated yet.
+    if (errorCode === "42P01") {
+      return null;
+    }
+    throw new AuthorizationError(`Failed to resolve workspace membership: ${error.message}`);
+  }
+
+  const memberships = (data ?? []) as WorkspaceMembershipRow[];
+  if (memberships.length === 0) {
+    return null;
+  }
+
+  if (preferredWorkspaceId) {
+    const preferred = memberships.find((membership) => membership.workspace_id === preferredWorkspaceId);
+    if (preferred) {
+      return {
+        workspaceId: preferred.workspace_id,
+        workspaceRole: preferred.role,
+      };
+    }
+  }
+
+  const active = memberships[0];
+  if (!active) return null;
+  return {
+    workspaceId: active.workspace_id,
+    workspaceRole: active.role,
+  };
 }
 
 export async function authMiddleware(req: Request, _res: Response, next: NextFunction): Promise<void> {
@@ -60,6 +127,11 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
 
       req.user = user;
       req.supabase = supabase;
+      const workspace = await resolveWorkspaceContext(req, supabase, user);
+      if (workspace) {
+        req.workspaceId = workspace.workspaceId;
+        req.workspaceRole = workspace.workspaceRole;
+      }
       Logger.setPersistence(supabase, user.id);
       return next();
     }
@@ -90,6 +162,11 @@ export async function authMiddleware(req: Request, _res: Response, next: NextFun
 
     req.user = user;
     req.supabase = supabase;
+    const workspace = await resolveWorkspaceContext(req, supabase, user);
+    if (workspace) {
+      req.workspaceId = workspace.workspaceId;
+      req.workspaceRole = workspace.workspaceRole;
+    }
     Logger.setPersistence(supabase, user.id);
     next();
   } catch (error) {

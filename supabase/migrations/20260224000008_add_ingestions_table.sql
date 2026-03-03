@@ -23,6 +23,7 @@ CREATE INDEX IF NOT EXISTS ingestions_user_id_idx ON ingestions(user_id, created
 -- RLS
 ALTER TABLE ingestions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can manage their own ingestions" ON ingestions;
 CREATE POLICY "Users can manage their own ingestions"
     ON ingestions FOR ALL
     USING (auth.uid() = user_id)
@@ -37,6 +38,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS ingestions_updated_at ON ingestions;
 CREATE TRIGGER ingestions_updated_at
     BEFORE UPDATE ON ingestions
     FOR EACH ROW EXECUTE FUNCTION update_ingestions_updated_at();

@@ -2,7 +2,7 @@
 -- (Previously this dropped public.ingestions, but we now retain it as Folio's primary UI table).
 -- Create rtx_activities table as defined in Compatible Mode docs
 -- Added user_id for multi-tenant isolation
-CREATE TABLE public.rtx_activities (
+CREATE TABLE IF NOT EXISTS public.rtx_activities (
   id uuid NOT NULL DEFAULT gen_random_uuid (),
   user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   raw_data jsonb NULL,            -- Your input data
@@ -20,9 +20,9 @@ CREATE TABLE public.rtx_activities (
 );
 
 -- Index for status queries
-CREATE INDEX idx_rtx_activities_status ON public.rtx_activities (status);
+CREATE INDEX IF NOT EXISTS idx_rtx_activities_status ON public.rtx_activities (status);
 -- Index for user list queries
-CREATE INDEX idx_rtx_activities_user ON public.rtx_activities (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_rtx_activities_user ON public.rtx_activities (user_id, created_at DESC);
 
 -- Ensure all columns are included in Realtime events
 ALTER TABLE public.rtx_activities REPLICA IDENTITY FULL;
@@ -30,6 +30,7 @@ ALTER TABLE public.rtx_activities REPLICA IDENTITY FULL;
 -- RLS
 ALTER TABLE public.rtx_activities ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Users can manage their own activities" ON public.rtx_activities;
 CREATE POLICY "Users can manage their own activities"
     ON public.rtx_activities FOR ALL
     USING (auth.uid() = user_id)
@@ -116,4 +117,16 @@ END $$;
 SELECT cron.schedule('scavenge-stale-locks', '* * * * *', 'SELECT public.rtx_fn_unlock_stale_locks();');
 
 -- Enable Realtime
-ALTER PUBLICATION supabase_realtime ADD TABLE public.rtx_activities;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_publication_tables
+    WHERE pubname = 'supabase_realtime'
+      AND schemaname = 'public'
+      AND tablename = 'rtx_activities'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.rtx_activities;
+  END IF;
+END
+$$;

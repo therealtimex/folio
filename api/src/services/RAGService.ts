@@ -133,7 +133,8 @@ export class RAGService {
         userId: string,
         rawText: string,
         supabase: SupabaseClient,
-        settings?: EmbeddingSettings
+        settings?: EmbeddingSettings,
+        workspaceId?: string
     ): Promise<void> {
         if (/^\[VLM_(IMAGE|PDF)_DATA:/.test(rawText)) {
             logger.info(`Skipping chunking and embedding for VLM base64 multimodal data (Ingestion: ${ingestionId})`);
@@ -147,6 +148,22 @@ export class RAGService {
         }
 
         const resolvedModel = await this.resolveEmbeddingModel(settings || {});
+        let resolvedWorkspaceId = (workspaceId ?? "").trim();
+        if (!resolvedWorkspaceId) {
+            const { data: ingestionRow, error: ingestionLookupError } = await supabase
+                .from("ingestions")
+                .select("workspace_id")
+                .eq("id", ingestionId)
+                .maybeSingle();
+            if (ingestionLookupError) {
+                throw new Error(`Failed to resolve workspace for ingestion ${ingestionId}: ${ingestionLookupError.message}`);
+            }
+            resolvedWorkspaceId = String(ingestionRow?.workspace_id ?? "").trim();
+            if (!resolvedWorkspaceId) {
+                throw new Error(`Workspace context is required to index chunks for ingestion ${ingestionId}`);
+            }
+        }
+
         logger.info(
             `Extracted ${chunks.length} chunks for ingestion ${ingestionId}. Embedding with ${resolvedModel.provider}/${resolvedModel.model}...`
         );
@@ -164,6 +181,7 @@ export class RAGService {
                     const { data: existing } = await supabase
                         .from("document_chunks")
                         .select("id")
+                        .eq("workspace_id", resolvedWorkspaceId)
                         .eq("ingestion_id", ingestionId)
                         .eq("content_hash", hash)
                         .eq("embedding_provider", resolvedModel.provider)
@@ -181,6 +199,7 @@ export class RAGService {
                     const vector_dim = embedding.length;
 
                     const { error } = await supabase.from("document_chunks").insert({
+                        workspace_id: resolvedWorkspaceId,
                         user_id: userId,
                         ingestion_id: ingestionId,
                         content,
@@ -212,6 +231,7 @@ export class RAGService {
      */
     private static async runSearchForModel(args: {
         userId: string;
+        workspaceId?: string;
         supabase: SupabaseClient;
         modelScope: ModelScope;
         queryEmbedding: number[];
@@ -219,17 +239,26 @@ export class RAGService {
         similarityThreshold: number;
         topK: number;
     }): Promise<RetrievedChunk[]> {
-        const { userId, supabase, modelScope, queryEmbedding, queryDim, similarityThreshold, topK } = args;
+        const { userId, workspaceId, supabase, modelScope, queryEmbedding, queryDim, similarityThreshold, topK } = args;
 
-        const { data, error } = await supabase.rpc("search_documents", {
-            p_user_id: userId,
+        const basePayload = {
             p_embedding_provider: modelScope.provider,
             p_embedding_model: modelScope.model,
             query_embedding: queryEmbedding,
             match_threshold: similarityThreshold,
             match_count: topK,
             query_dim: queryDim
-        });
+        };
+
+        const { data, error } = workspaceId
+            ? await supabase.rpc("search_workspace_documents", {
+                p_workspace_id: workspaceId,
+                ...basePayload
+            })
+            : await supabase.rpc("search_documents", {
+                p_user_id: userId,
+                ...basePayload
+            });
 
         if (error) {
             throw new Error(`Knowledge base search failed for ${modelScope.provider}/${modelScope.model}: ${error.message}`);
@@ -238,19 +267,27 @@ export class RAGService {
         return (data || []) as RetrievedChunk[];
     }
 
-    private static async listUserModelScopes(
+    private static async listModelScopes(
         userId: string,
-        supabase: SupabaseClient
+        supabase: SupabaseClient,
+        workspaceId?: string
     ): Promise<ModelScope[]> {
-        const { data, error } = await supabase
+        let query = supabase
             .from("document_chunks")
             .select("embedding_provider, embedding_model, vector_dim, created_at")
-            .eq("user_id", userId)
             .order("created_at", { ascending: false })
             .limit(2000);
 
+        if (workspaceId) {
+            query = query.eq("workspace_id", workspaceId);
+        } else {
+            query = query.eq("user_id", userId);
+        }
+
+        const { data, error } = await query;
+
         if (error) {
-            logger.warn("Failed to list user embedding scopes for RAG fallback", { error });
+            logger.warn("Failed to list embedding scopes for RAG fallback", { userId, workspaceId, error });
             return [];
         }
 
@@ -284,12 +321,14 @@ export class RAGService {
             topK?: number;
             similarityThreshold?: number;
             settings?: EmbeddingSettings;
+            workspaceId?: string;
         } = {}
     ): Promise<RetrievedChunk[]> {
         const {
             topK = 5,
             similarityThreshold = 0.7,
-            settings
+            settings,
+            workspaceId
         } = options;
 
         const minThreshold = Math.max(0.1, Math.min(similarityThreshold, 0.4));
@@ -325,6 +364,7 @@ export class RAGService {
 
             const hits = await this.runSearchForModel({
                 userId,
+                workspaceId,
                 supabase,
                 modelScope: scope,
                 queryEmbedding,
@@ -363,7 +403,7 @@ export class RAGService {
         }
 
         if (collected.size === 0) {
-            const scopes = await this.listUserModelScopes(userId, supabase);
+            const scopes = await this.listModelScopes(userId, supabase, workspaceId);
             const fallbackScopes = scopes.filter(
                 (scope) => !(scope.provider === preferredScope.provider && scope.model === preferredScope.model)
             );
