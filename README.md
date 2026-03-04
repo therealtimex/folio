@@ -4,6 +4,8 @@ Folio is an intelligent document processing and automation platform that acts as
 
 If you deal with invoices, receipts, reports, or any unstructured documents, Folio handles the heavy lifting of reading, extracting, and routing your data where it belongs.
 
+Folio is designed to be run locally on your machine while securely syncing data to your own designated cloud backend. 
+
 ## ✨ Key Features
 
 - **Intelligent Ingestion**: Simply drop in PDFs, images, or raw text. Folio automatically reads and extracts the context, using high-speed Vision-Language Models (VLMs) for images.
@@ -16,8 +18,6 @@ If you deal with invoices, receipts, reports, or any unstructured documents, Fol
 - **Transparency & Control**: Watch exactly what the AI is doing in real-time with the **LiveTerminal** trace logs. 
 
 ## 🚀 Getting Started
-
-Folio is designed to be run locally on your machine while securely syncing data to your own designated cloud backend. 
 
 ### Prerequisites
 - The [RealTimeX Desktop App](https://realtimex.ai) installed on your machine.
